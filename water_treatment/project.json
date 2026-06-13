@@ -1,0 +1,44 @@
+{
+  "meta": {
+    "name": "Water Treatment Plant",
+    "type": "plc-project",
+    "description": "CPSS End-Semester Project — ICS/SCADA Security Attack Demonstration",
+    "version": "1.0"
+  },
+  "data": {
+    "dataTypes": [],
+    "pous": [],
+    "configuration": {
+      "resource": {
+        "tasks": [
+          {
+            "name": "task0",
+            "triggering": "Cyclic",
+            "interval": "T#20ms",
+            "priority": 1
+          }
+        ],
+        "instances": [
+          {
+            "name": "instance0",
+            "task": "task0",
+            "program": "main"
+          }
+        ],
+        "globalVariables": []
+      }
+    },
+    "servers": [
+      {
+        "name": "modbus",
+        "protocol": "modbus-tcp",
+        "modbusSlaveConfig": {
+          "enabled": true,
+          "networkInterface": "0.0.0.0",
+          "port": 502
+        }
+      }
+    ],
+    "deletedPous": []
+  }
+}

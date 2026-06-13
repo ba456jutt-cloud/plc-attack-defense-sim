@@ -1,0 +1,6 @@
+pymodbus==3.6.6
+flask>=3.0.0
+weasyprint>=60.0
+requests>=2.31.0
+scipy>=1.11.0
+scapy>=2.5.0

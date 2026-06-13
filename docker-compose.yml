@@ -1,0 +1,204 @@
+# docker-compose.yml
+# CPSS Project — Full Stack Orchestration
+#
+# Services:
+#   openplc    — OpenPLC Runtime (PLC + Modbus slave on :502, web UI on :8080)
+#   firewall   — Modbus firewall proxy (:5502 → openplc:502)
+#   sis        — Safety Instrumented System (independent safety monitor)
+#   physics    — ODE physics engine (writes reservoir level to PLC registers)
+#   digital_twin — CM-6 Anomaly detection (Z-score + CUSUM)
+#   dashboard  — Flask HMI dashboard (:5000)
+#   auth_proxy — HMAC-SHA256 auth proxy (:5020 → openplc:502)
+#
+# Two separate networks model a real plant topology:
+#   field_net     — "OT network": openplc + field devices (firewall, sis, physics)
+#   control_net   — "IT/control network": dashboard, auth_proxy, attacker tools
+#
+# The firewall bridges both networks, which is realistic:
+# the Purdue Model Level 2/3 boundary device sits between field and control.
+#
+# USAGE:
+#   docker-compose up                        # start all services
+#   docker-compose up openplc firewall sis   # start subset
+#   docker-compose run attacker python3 attacker/attack_tool.py
+#   docker-compose logs -f firewall          # follow firewall logs
+#   docker-compose down                      # stop and remove containers
+#
+# LATERAL MOVEMENT DEMO:
+#   The attacker container is on control_net only (not field_net).
+#   It can reach the firewall on :5502 but NOT openplc:502 directly.
+#   To demonstrate lateral movement, exec into the firewall container
+#   (which IS on field_net) and attack openplc:502 from there:
+#     docker-compose exec firewall python3 attacker/attack_tool.py \
+#       --host openplc --port 502
+
+# ── Named volumes ──────────────────────────────────────────────────────────────
+volumes:
+  openplc_data:
+  shared_logs:
+
+# ── Networks ───────────────────────────────────────────────────────────────────
+networks:
+  field_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
+  control_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.200.0/24
+
+# ── Services ───────────────────────────────────────────────────────────────────
+services:
+
+  # ── OpenPLC Runtime ──────────────────────────────────────────────────────────
+  openplc:
+    build: ./OpenPLC_v3
+    container_name: cpss_openplc
+    networks:
+      - field_net
+    ports:
+      - "502:502"
+      - "8080:8080"
+    volumes:
+      - openplc_data:/workdir
+      - ./water_treatment:/water_treatment:ro
+    environment:
+      - OPENPLC_USER=admin
+      - OPENPLC_PASS=openplc
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/dashboard"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Modbus Firewall ───────────────────────────────────────────────────────────
+  firewall:
+    build: .
+    container_name: cpss_firewall
+    command: python3 defense/modbus_firewall.py
+    networks:
+      - field_net
+      - control_net
+    ports:
+      - "5502:5502"
+    volumes:
+      - shared_logs:/app/logs
+    environment:
+      - PLC_HOST=openplc
+      - PLC_PORT=502
+    depends_on:
+      openplc:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Safety Instrumented System ────────────────────────────────────────────────
+  sis:
+    build: .
+    container_name: cpss_sis
+    command: python3 defense/sis.py --poll 0.5
+    networks:
+      - field_net
+    volumes:
+      - shared_logs:/app/logs
+    environment:
+      - PLC_HOST=openplc
+      - PLC_PORT=502
+    depends_on:
+      openplc:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Physics Engine ────────────────────────────────────────────────────────────
+  physics:
+    build: .
+    container_name: cpss_physics
+    command: python3 water_treatment/physics.py --tick 0.5
+    networks:
+      - field_net
+    environment:
+      - PLC_HOST=openplc
+      - PLC_PORT=502
+    depends_on:
+      openplc:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Digital Twin (Countermeasures) ────────────────────────────────────────────
+  digital_twin:
+    build: .
+    container_name: cpss_digital_twin
+    command: python3 defense/countermeasures.py --poll 0.5
+    networks:
+      - field_net
+    volumes:
+      - shared_logs:/app/logs
+    environment:
+      - PLC_HOST=openplc
+      - PLC_PORT=502
+    depends_on:
+      openplc:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Auth Proxy ────────────────────────────────────────────────────────────────
+  auth_proxy:
+    build: .
+    container_name: cpss_auth_proxy
+    command: python3 auth_proxy.py
+    networks:
+      - field_net
+      - control_net
+    ports:
+      - "5020:5020"
+    volumes:
+      - shared_logs:/app/logs
+    environment:
+      - PLC_HOST=openplc
+      - PLC_PORT=502
+    depends_on:
+      openplc:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Dashboard ─────────────────────────────────────────────────────────────────
+  dashboard:
+    build: .
+    container_name: cpss_dashboard
+    command: python3 dashboard/server.py
+    networks:
+      - control_net
+    ports:
+      - "5000:5000"
+    volumes:
+      - shared_logs:/app/logs
+    environment:
+      - PLC_HOST=firewall
+      - PLC_PORT=5502
+    depends_on:
+      - firewall
+    restart: unless-stopped
+
+  # ── Attacker (interactive, not auto-started) ──────────────────────────────────
+  # Run with: docker-compose run --profile attacker attacker python3 attacker/attack_tool.py
+  attacker:
+    build: .
+    container_name: cpss_attacker
+    networks:
+      - control_net
+    environment:
+      - PLC_HOST=firewall
+      - PLC_PORT=5502
+      - OPENPLC_URL=http://openplc:8080
+    volumes:
+      - shared_logs:/app/logs
+      - ./evidence:/app/evidence
+    profiles:
+      - attacker
+    stdin_open: true
+    tty: true
+    command: python3 attacker/attack_tool.py

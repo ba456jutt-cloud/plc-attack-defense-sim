@@ -1,0 +1,372 @@
+% REFERENCES.bib
+% CPSS Project — PLC Ladder Logic Injection Attack Simulation
+% BibTeX reference file — 25 sources
+%
+% Organised by topic:
+%   [1–4]   Core logic injection papers (directly relevant to project title)
+%   [5–8]   ICS anomaly detection (relevant to CM-6)
+%   [9–12]  Real-world ICS attacks (Stuxnet, Triton, Oldsmar)
+%   [13–16] Standards and frameworks
+%   [17–20] Water/SCADA security specifically
+%   [21–25] Foundational protocols and tools
+
+% ── [1–4] Core logic injection papers ────────────────────────────────────────
+
+@inproceedings{yoo2019control,
+  author    = {Yoo, Hyunguk and Ahmed, Irfan},
+  title     = {Control Logic Injection Attacks on Industrial Control Systems},
+  booktitle = {Proceedings of the 34th IFIP TC-11 International Conference
+               on ICT Systems Security and Privacy Protection (SEC 2019)},
+  year      = {2019},
+  pages     = {33--48},
+  publisher = {Springer},
+  doi       = {10.1007/978-3-030-22312-0_3},
+  note      = {Directly demonstrates injection of malicious IEC 61131-3 ladder
+               logic via OpenPLC web interface — the exact technique implemented
+               in attacker/logic\_injection.py of this project}
+}
+
+@inproceedings{govil2017ladder,
+  author    = {Govil, Naman and Agrawal, Anand and Tippenhauer, Nils Ole},
+  title     = {On Ladder Logic Bombs in Industrial Control Systems},
+  booktitle = {Workshop on Attacks and Defenses for Internet-of-Things (ADIoT),
+               co-located with ESORICS 2017},
+  year      = {2017},
+  publisher = {Springer},
+  note      = {Introduces the term "ladder logic bomb" and formalises the
+               attack class. Defines stealthy vs. overt injection and describes
+               detection evasion techniques including the historian blindspot
+               (Malicious Rung 4 in this project)}
+}
+
+@inproceedings{senthivel2018denial,
+  author    = {Senthivel, Saranyan and Ahmed, Shabbir and Yoo, Hyunguk and
+               Ahmed, Irfan and Roussev, Vassil},
+  title     = {Denial of Engineering Operations Attacks on Industrial Control Systems},
+  booktitle = {Proceedings of the 8th ACM Conference on Data and
+               Application Security and Privacy (CODASPY 2018)},
+  year      = {2018},
+  pages     = {319--329},
+  publisher = {ACM},
+  doi       = {10.1145/3176258.3176294},
+  note      = {Introduces the Denial of Engineering Operations (DoEO) attack class:
+               an attacker modifies the running PLC program but also prevents the
+               engineer from uploading corrective logic. Relevant to Stage G of
+               logic\_injection.py and the "no recovery" scenario in apt\_scenario.py}
+}
+
+@inproceedings{mclaughlin2014stealthy,
+  author    = {McLaughlin, Stephen E.},
+  title     = {On Dynamic Malware Payloads Aimed at Programmable Logic Controllers},
+  booktitle = {Proceedings of the 6th USENIX Workshop on Hot Topics in
+               Security (HotSec 2011)},
+  year      = {2011},
+  publisher = {USENIX Association},
+  note      = {Describes stealthy PLC payload delivery that mimics benign ladder
+               logic to evade signature-based detection. The "look identical to
+               original" design of the malicious rungs in logic\_injection.py
+               follows this evasion strategy}
+}
+
+% ── [5–8] ICS anomaly detection ───────────────────────────────────────────────
+
+@inproceedings{inoue2017anomaly,
+  author    = {Inoue, Jun and Yamagata, Yoriyuki and Chen, Yuqi and
+               Poskitt, Christopher M. and Sun, Jun},
+  title     = {Anomaly Detection for a Water Treatment System Using
+               Unsupervised Machine Learning},
+  booktitle = {2017 IEEE International Conference on Data Mining Workshops (ICDMW)},
+  year      = {2017},
+  pages     = {1058--1065},
+  publisher = {IEEE},
+  doi       = {10.1109/ICDMW.2017.149},
+  note      = {LSTM autoencoder anomaly detection on the SWaT (Secure Water
+               Treatment) dataset. Provides the published TPR/FPR baseline
+               (TPR=0.94, FPR=0.06) used for comparison in EVALUATION.md}
+}
+
+@inproceedings{audibert2020usad,
+  author    = {Audibert, Julien and Michiardi, Pietro and Guyard, Fr{\'e}d{\'e}ric
+               and Marti, S{\'e}bastien and Zuluaga, Maria A.},
+  title     = {{USAD}: {UnSupervised} Anomaly Detection on Multivariate Time Series},
+  booktitle = {Proceedings of the 26th ACM SIGKDD International Conference on
+               Knowledge Discovery \& Data Mining},
+  year      = {2020},
+  pages     = {3395--3404},
+  publisher = {ACM},
+  doi       = {10.1145/3394486.3403392},
+  note      = {IsolationForest and USAD benchmarks on the HAI dataset. Source
+               of the IsolationForest baseline (TPR=0.82, FPR=0.08) in EVALUATION.md}
+}
+
+@inproceedings{anton2019anomaly,
+  author    = {Ant{\'o}n, Simon D. and Fraunholz, Daniel and Schotten, Hans Dieter},
+  title     = {Anomaly-Based Intrusion Detection in Industrial Data with
+               {SVM} and Random Forests},
+  booktitle = {International Conference on Cyber Situational Awareness,
+               Data Analytics and Assessment (CyberSA 2019)},
+  year      = {2019},
+  publisher = {IEEE},
+  note      = {Applies SVM and Random Forest to ICS process data anomaly
+               detection; compares per-sensor vs. multivariate detection.
+               Motivates the single-register limitation noted in EVALUATION.md
+               Section 4 (Limitations)}
+}
+
+@inproceedings{taormina2018battle,
+  author    = {Taormina, Riccardo and Galelli, Stefano and Tippenhauer, Nils Ole
+               and others},
+  title     = {Battle of the Attack Detection Algorithms: Disclosing Cyber Attacks
+               on Water Distribution Networks},
+  journal   = {Journal of Water Resources Planning and Management},
+  volume    = {144},
+  number    = {4},
+  year      = {2018},
+  publisher = {ASCE},
+  doi       = {10.1061/(ASCE)WR.1943-5452.0000969},
+  note      = {BATADAL dataset and detection algorithm comparison. Source of
+               Suricata-ICS baseline (TPR~0.89, FPR~0.04) in EVALUATION.md.
+               The water distribution physics (tank ODEs, pump curves) in
+               water\_treatment/physics.py follow the BATADAL simulation model}
+}
+
+% ── [9–12] Real-world ICS attacks ─────────────────────────────────────────────
+
+@article{langner2011stuxnet,
+  author  = {Langner, Ralph},
+  title   = {Stuxnet: Dissecting a Cyberweapon},
+  journal = {IEEE Security \& Privacy},
+  volume  = {9},
+  number  = {3},
+  pages   = {49--51},
+  year    = {2011},
+  doi     = {10.1109/MSP.2011.67},
+  note    = {Technical analysis of Stuxnet's DB890/DP\_RECV hook — the first
+             documented real-world ladder logic injection attack. The alarm
+             suppression technique in Malicious Rung 1 of logic\_injection.py
+             directly mirrors Stuxnet's centrifuge-data spoofing}
+}
+
+@article{dragos2017trisis,
+  author  = {Dragos Inc.},
+  title   = {{TRISIS}: Analyzing Safety System Targeted Malware},
+  journal = {Dragos Intelligence Report},
+  year    = {2017},
+  url     = {https://www.dragos.com/resource/trisis-analyzing-safety-system-targeted-malware/},
+  note    = {First public technical analysis of the Triton/TRISIS malware that
+             targeted Schneider Electric Triconex Safety Instrumented Systems at
+             a petrochemical plant. Motivates the SIS design in defense/sis.py
+             and the SCRAM logic (Section 3) of that module}
+}
+
+@techreport{cisa2021oldsmar,
+  author      = {{Cybersecurity and Infrastructure Security Agency (CISA)}},
+  title       = {Alert {AA21-042A}: Compromise of U.S. Water Treatment Facility},
+  institution = {CISA / FBI / EPA},
+  year        = {2021},
+  number      = {AA21-042A},
+  url         = {https://www.cisa.gov/news-events/cybersecurity-advisories/aa21-042a},
+  note        = {Official advisory on the Oldsmar, Florida water treatment plant
+                 attack (February 2021). Attacker accessed TeamViewer and raised
+                 sodium hydroxide setpoint to 111x normal via HMI — the exact
+                 threat model that this project's chlorine overdose attack models.
+                 Motivates the default-credential and direct-HMI-access threat
+                 in THREAT\_MODEL.md}
+}
+
+@inproceedings{basnight2013firmware,
+  author    = {Basnight, Zachry and Butts, Jonathan and Lopez, Juan and
+               Dube, Thomas},
+  title     = {Firmware Modification Attacks on Programmable Logic Controllers},
+  booktitle = {International Journal of Critical Infrastructure Protection},
+  volume    = {6},
+  number    = {2},
+  pages     = {76--84},
+  year      = {2013},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.ijcip.2013.04.004},
+  note      = {Documents firmware-level PLC attacks (Tier 3 in THREAT\_MODEL.md).
+               Shows that uploaded program bytecode can be modified post-compilation
+               before execution — the compiled .so attack vector mentioned in
+               docs/THREAT\_MODEL.md Section 6}
+}
+
+% ── [13–16] Standards and frameworks ──────────────────────────────────────────
+
+@techreport{iec62443,
+  author      = {{International Electrotechnical Commission}},
+  title       = {{IEC 62443-3-3}: Industrial Communication Networks — Network and
+                 System Security — Part 3-3: System Security Requirements and
+                 Security Levels},
+  institution = {IEC},
+  year        = {2013},
+  number      = {IEC 62443-3-3:2013},
+  note        = {Defines Security Requirement (SR) numbers cited throughout
+                 countermeasures.py: SR 3.5 (Input Validation), SR 6.1 (Audit Log
+                 Accessibility), SR 6.2 (Audit Record Review), SR 7.3 (Control
+                 System Backup). Security Level 2 (SL2) is the target for this
+                 project's defense layer}
+}
+
+@techreport{nist80082,
+  author      = {Stouffer, Keith and Pillitteri, Victoria and Lightman, Suzanne
+                 and Abrams, Marshall and Hahn, Adam},
+  title       = {{NIST SP 800-82} Rev.\ 3: Guide to Operational Technology ({OT})
+                 Security},
+  institution = {National Institute of Standards and Technology},
+  year        = {2023},
+  number      = {SP 800-82 Rev. 3},
+  doi         = {10.6028/NIST.SP.800-82r3},
+  note        = {Definitive US federal guide for ICS/OT security. Section 3.2
+                 establishes the A > I > C priority ordering for ICS assets used
+                 in THREAT\_MODEL.md. Section 6.2 "Protective Technology" covers
+                 the cavitation prevention logic in CM-4/CM-4b}
+}
+
+@techreport{nist800131a,
+  author      = {Barker, Elaine and Roginsky, Allen},
+  title       = {{NIST SP 800-131A} Rev.\ 2: Transitioning the Use of
+                 Cryptographic Algorithms and Key Lengths},
+  institution = {National Institute of Standards and Technology},
+  year        = {2019},
+  number      = {SP 800-131A Rev. 2},
+  doi         = {10.6028/NIST.SP.800-131Ar2},
+  note        = {Deprecates SHA-1 for all new cryptographic applications.
+                 Cited in auth\_proxy.py as the justification for upgrading
+                 HMAC-SHA1 to HMAC-SHA256 (Phase 4 of this project)}
+}
+
+@misc{mitreics,
+  author = {{MITRE Corporation}},
+  title  = {{ATT\&CK} for {ICS} — Industrial Control Systems Attack Matrix},
+  year   = {2020},
+  url    = {https://attack.mitre.org/matrices/ics/},
+  note   = {Provides the T-code taxonomy used throughout this project:
+            T0836 (Modify Parameter), T0838 (Modify Alarm Settings),
+            T0839 (Module Firmware), T0865 (Credential Access),
+            T0873 (Project File Infection), T0800 (Activate Firmware Update),
+            T0831 (Manipulation of Control), T0816 (Device Restart/Shutdown),
+            T0855 (Unauthorized Command Message)}
+}
+
+% ── [17–20] Water/SCADA security ──────────────────────────────────────────────
+
+@inproceedings{krotofil2013resilience,
+  author    = {Krotofil, Marina and C{\'a}rdenas, Alvaro A.},
+  title     = {Resilience of Process Control Systems to Cyber-Physical Attacks},
+  booktitle = {Nordic Conference on Secure IT Systems (NordSec 2013)},
+  year      = {2013},
+  pages     = {166--182},
+  publisher = {Springer},
+  doi       = {10.1007/978-3-642-41488-6_12},
+  note      = {Introduces the concept of "process-aware attacks" that exploit
+               physical process knowledge to cause damage while remaining
+               within sensor noise bounds. Motivates the CM-6 CUSUM detection
+               and the slow-drift attack class in run\_evaluation.py}
+}
+
+@article{rossman2000epanet,
+  author  = {Rossman, Lewis A.},
+  title   = {{EPANET} 2 Users Manual},
+  journal = {US EPA Report EPA/600/R-00/057},
+  year    = {2000},
+  url     = {https://www.epa.gov/water-research/epanet},
+  note    = {Defines the first-order bulk chlorine decay model (dC/dt = -k*C)
+             used in water\_treatment/physics.py Section 3.2. The decay constant
+             K\_DECAY\_1\_S = 0.002 /s is from Table 3-1 of this manual at 20°C}
+}
+
+@techreport{who2011chlorine,
+  author      = {{World Health Organization}},
+  title       = {Guidelines for Drinking-water Quality, 4th Edition},
+  institution = {WHO},
+  year        = {2011},
+  isbn        = {978-92-4-154815-1},
+  url         = {https://www.who.int/publications/i/item/9789241548151},
+  note        = {Chapter 8 (Disinfectants — Chlorine). Establishes the 5 mg/L
+                 safe maximum and 10 mg/L acute toxicity concern threshold mapped
+                 in physics.py constants WHO\_SAFE\_MAX\_MGL and WHO\_TOXIC\_MGL.
+                 The dose scale (register 200 = 2.0 mg/L) is calibrated to keep
+                 nominal operation within WHO safe range}
+}
+
+@inproceedings{rocchetto2016minicps,
+  author    = {Rocchetto, Marco and Tippenhauer, Nils Ole},
+  title     = {{MiniCPS}: A Toolkit for Security Research on {CPS} Networks},
+  booktitle = {Proceedings of the 1st ACM Workshop on Cyber-Physical Systems
+               Security and Privacy (CPS-SPC 2016)},
+  year      = {2016},
+  pages     = {91--100},
+  publisher = {ACM},
+  doi       = {10.1145/2994487.2994493},
+  note      = {The MiniCPS framework for ICS simulation. Referenced in
+               water\_treatment/physics.py as the alternative framework that
+               could couple the ODE engine to a full network simulation.
+               Our physics.py replicates MiniCPS's single-tank model}
+}
+
+% ── [21–25] Foundational protocols and tools ──────────────────────────────────
+
+@techreport{modbus2006spec,
+  author      = {{Modbus Organization}},
+  title       = {Modbus Application Protocol Specification V1.1b3},
+  institution = {Modbus Organization},
+  year        = {2006},
+  url         = {https://www.modbus.org/docs/Modbus_Application_Protocol_V1_1b3.pdf},
+  note        = {Defines the Modbus TCP framing (MBAP header), function codes
+                 FC01–FC17, and exception codes decoded in defense/packet\_capture.py
+                 and evidence/capture\_attack.py. The zero-authentication design
+                 is inherent to this specification}
+}
+
+@inproceedings{shostack2014threat,
+  author    = {Shostack, Adam},
+  title     = {Threat Modeling: Designing for Security},
+  year      = {2014},
+  publisher = {Wiley},
+  isbn      = {978-1-118-80999-0},
+  note      = {Defines the STRIDE methodology (Spoofing, Tampering, Repudiation,
+               Information Disclosure, Denial of Service, Elevation of Privilege)
+               used in THREAT\_MODEL.md Section 5. The per-asset STRIDE tables
+               follow the structure from Chapter 4}
+}
+
+@article{schneier1999attack,
+  author  = {Schneier, Bruce},
+  title   = {Attack Trees},
+  journal = {Dr. Dobb's Journal},
+  volume  = {24},
+  number  = {12},
+  pages   = {21--29},
+  year    = {1999},
+  note    = {Original attack tree notation used in THREAT\_MODEL.md Section 6.
+             The three-branch tree (Modbus register write / logic injection /
+             firmware modification) follows Schneier's AND/OR node model}
+}
+
+@misc{openplc2017,
+  author = {Alves, Thiago},
+  title  = {{OpenPLC} Runtime v3},
+  year   = {2017},
+  url    = {https://openplcproject.com/},
+  note   = {Open-source IEC 61131-3 PLC runtime used as the target in this
+            project. The web interface upload endpoint (/upload-program, /run-plc)
+            exploited by attacker/logic\_injection.py is specific to OpenPLC.
+            The matiec compiler it uses to compile .st → .so is also the
+            source of the compiled object that could be targeted in a
+            Tier 3 firmware attack}
+}
+
+@inproceedings{adepu2016investigation,
+  author    = {Adepu, Sridhar and Mathur, Aditya},
+  title     = {Generalized Attacker and Attack Models for Cyber Physical Systems},
+  booktitle = {IEEE 40th Annual Computer Software and Applications Conference (COMPSAC)},
+  year      = {2016},
+  pages     = {283--292},
+  publisher = {IEEE},
+  doi       = {10.1109/COMPSAC.2016.101},
+  note      = {Defines attacker capability tiers for CPS (equivalent to the
+               Tier 1/2/3 model in THREAT\_MODEL.md Section 4). The SWaT testbed
+               used in this paper is the same facility that produced the SWaT
+               dataset used to benchmark LSTM-AE in EVALUATION.md}
+}

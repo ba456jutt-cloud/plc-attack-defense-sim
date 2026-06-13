@@ -1,0 +1,1492 @@
+<!--
+  dashboard.html — CPSS Unified SCADA Presentation Terminal (v4 — redesign)
+  =========================================================================
+  3-act storytelling layout per spec:
+    Act 1 — Normal operations (STANDBY)
+    Act 2 — Attack in progress (ATTACK MODE — right column takes over)
+    Act 3 — Defense response and post-attack summary
+
+  LAYOUT: two columns
+    LEFT  (60%) — plant SVG + large parameter bars + alarm strip
+    RIGHT (40%) — STANDBY: pills + attack buttons
+                  ATTACK:  live attack panel (auto-transitions)
+  BELOW both — collapsible Modbus traffic table
+
+  SSE endpoints preserved:
+    GET /hmi/stream          — PLC state
+    GET /dashboard/narrative — attack narrative lines
+    GET /dashboard/traffic   — Modbus packets
+
+  Bug fixes applied:
+    BUG1 — pill-fw polls /defense/firewall/health every 3s
+    BUG3 — overlay verdict uses response.verdict from server, not hardcoded
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCADA TERMINAL — MUNICIPAL WATER TREATMENT PLANT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0a; --surface:#111; --panel:#161616; --border:#222; --border2:#2e2e2e;
+  --text:#d4d4d4; --muted:#555; --muted2:#333; --dim:#888;
+  --green:#00cc55; --green-glow:rgba(0,204,85,.15); --green-dim:#001a0b;
+  --amber:#ffaa00; --amber-glow:rgba(255,170,0,.15); --amber-dim:#1f1400;
+  --red:#ff2200; --red-glow:rgba(255,34,0,.18); --red-dim:#1a0500;
+  --orange:#ff6600; --blue:#0088ff; --cyan:#00ccff; --purple:#aa44ff;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+  --font-disp:'Share Tech Mono','JetBrains Mono',monospace;
+}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font-mono);font-size:11px;line-height:1.4;}
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.08) 2px,rgba(0,0,0,.08) 4px);pointer-events:none;z-index:9999;}
+
+/* ── TOP BAR ── */
+#topbar{display:flex;align-items:center;height:46px;padding:0 18px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;position:relative;z-index:100;}
+#tb-title{font-family:var(--font-disp);font-size:12px;letter-spacing:.18em;color:var(--amber);text-transform:uppercase;white-space:nowrap;}
+#tb-title span{color:var(--muted);margin:0 8px;}
+#tb-pills{position:absolute;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;}
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border:1px solid;font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;transition:all .3s;}
+.pill-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0;animation:dot-pulse 2s ease-in-out infinite;}
+@keyframes dot-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.pill.green{border-color:var(--green);color:var(--green);background:var(--green-dim);}
+.pill.green .pill-dot{background:var(--green);box-shadow:0 0 5px var(--green);}
+.pill.amber{border-color:var(--amber);color:var(--amber);background:var(--amber-dim);}
+.pill.amber .pill-dot{background:var(--amber);box-shadow:0 0 5px var(--amber);}
+.pill.red{border-color:var(--red);color:var(--red);background:var(--red-dim);}
+.pill.red .pill-dot{background:var(--red);box-shadow:0 0 5px var(--red);}
+#mode-badge{padding:3px 12px;border:1px solid var(--border2);font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;margin-left:12px;transition:all .4s;}
+#mode-badge.attacking{border-color:var(--red);color:var(--red);background:var(--red-dim);animation:badge-blink .5s ease-in-out infinite alternate;}
+#mode-badge.defended{border-color:var(--amber);color:var(--amber);background:var(--amber-dim);}
+#mode-badge.normal{border-color:var(--green);color:var(--green);background:var(--green-dim);}
+@keyframes badge-blink{from{opacity:.7}to{opacity:1}}
+#tb-right{margin-left:auto;text-align:right;}
+#clock{font-family:var(--font-disp);font-size:18px;color:var(--text);letter-spacing:.05em;}
+#datestamp{font-size:8px;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;}
+
+/* ── MAIN LAYOUT ── */
+#main{display:flex;flex-direction:column;height:calc(100vh - 46px);overflow:hidden;}
+#columns{display:flex;flex:1;overflow:hidden;min-height:0;}
+
+/* ── LEFT COLUMN (60%) ── */
+#left-col{
+  flex:0 0 60%;
+  display:flex;flex-direction:column;
+  border-right:1px solid var(--border);
+  overflow:hidden;
+}
+
+/* Plant diagram area */
+#plant-area{
+  flex:0 0 52%;
+  position:relative;
+  background:var(--bg);
+  border-bottom:1px solid var(--border);
+  overflow:hidden;
+}
+#plant-area::before{
+  content:'';position:absolute;inset:0;
+  background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);
+  background-size:40px 40px;opacity:.3;pointer-events:none;
+}
+#hero-label{position:absolute;top:8px;left:14px;font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;display:flex;align-items:center;gap:6px;}
+#hero-label::before{content:'▸';color:var(--amber);}
+#live-dot{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green);animation:dot-pulse 1.5s ease-in-out infinite;margin-left:4px;}
+#plant-svg{width:100%;height:100%;display:block;}
+
+/* ── PARAMETERS (large, 32px min) ── */
+#params-area{
+  flex:1;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+.sec-hdr{display:flex;align-items:center;padding:6px 14px;background:var(--panel);border-bottom:1px solid var(--border);font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;flex-shrink:0;}
+.sec-hdr-acc{color:var(--amber);margin-right:6px;}
+.sec-hdr-right{margin-left:auto;font-size:8px;color:var(--muted2);}
+
+#params-grid{
+  display:grid;grid-template-columns:1fr 1fr;
+  flex:1;overflow:hidden;
+}
+.param-cell{
+  padding:10px 14px;
+  border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+  background:var(--surface);
+  display:flex;flex-direction:column;justify-content:space-between;
+  position:relative;overflow:hidden;
+}
+.param-cell:nth-child(2n){border-right:none;}
+.param-cell:nth-child(3),.param-cell:nth-child(4){border-bottom:none;}
+.param-cell::after{content:'';position:absolute;top:0;left:0;width:2px;height:100%;background:var(--border2);transition:background .4s;}
+.param-cell.warn::after{background:var(--amber);}
+.param-cell.crit::after{background:var(--red);box-shadow:2px 0 8px var(--red-glow);}
+.param-name{font-size:8px;font-weight:700;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:2px;}
+.param-range{font-size:7px;color:var(--muted2);letter-spacing:.06em;}
+.param-val{
+  font-family:var(--font-disp);
+  font-size:36px;
+  line-height:1;
+  color:var(--green);
+  margin:4px 0 2px;
+  transition:color .4s,text-shadow .4s;
+}
+.param-val.warn{color:var(--amber);}
+.param-val.crit{color:var(--red);text-shadow:0 0 20px rgba(255,34,0,.4);animation:val-shake .3s ease-in-out infinite alternate;}
+@keyframes val-shake{from{transform:translateX(0)}to{transform:translateX(2px)}}
+.param-unit{font-size:13px;color:var(--muted);margin-left:3px;}
+.param-bar{height:4px;background:var(--border);position:relative;overflow:hidden;margin-top:2px;}
+.param-bar-fill{position:absolute;left:0;top:0;height:100%;background:var(--green);transition:width .5s,background .5s;}
+.param-bar-fill.warn{background:var(--amber);}
+.param-bar-fill.crit{background:var(--red);box-shadow:0 0 6px var(--red);animation:bar-pulse .4s ease-in-out infinite alternate;}
+@keyframes bar-pulse{from{opacity:.8}to{opacity:1}}
+
+/* Alarm strip */
+#alarm-strip{
+  flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  height:30px;
+  background:var(--green-dim);border-top:1px solid var(--border);
+  font-size:9px;font-weight:700;letter-spacing:.1em;color:var(--green);text-transform:uppercase;gap:8px;
+  transition:all .4s;
+}
+#alarm-strip.active{background:var(--red-dim);color:var(--red);border-top-color:var(--red);animation:alarm-flash .6s ease-in-out infinite alternate;}
+@keyframes alarm-flash{from{background:var(--red-dim)}to{background:#2a0600}}
+
+/* ── RIGHT COLUMN (40%) ── */
+#right-col{
+  flex:1;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  position:relative;
+}
+
+/* ── STANDBY PANEL ── */
+#standby-panel{
+  display:flex;flex-direction:column;
+  height:100%;
+  transition:opacity .3s;
+}
+#standby-panel.hidden{opacity:0;pointer-events:none;position:absolute;inset:0;}
+
+/* Status pills section */
+#status-section{
+  padding:14px 16px 10px;
+  background:var(--panel);
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+}
+#status-section .sec-label{font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;margin-bottom:10px;}
+#status-pills-col{display:flex;flex-direction:column;gap:6px;}
+.status-row{display:flex;align-items:center;gap:10px;font-size:9px;}
+.status-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 12px;border:1px solid;
+  font-size:8px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+  min-width:130px;
+  transition:all .3s;
+}
+.status-badge.green{border-color:var(--green);color:var(--green);background:var(--green-dim);}
+.status-badge.green .pill-dot{background:var(--green);box-shadow:0 0 5px var(--green);}
+.status-badge.amber{border-color:var(--amber);color:var(--amber);background:var(--amber-dim);}
+.status-badge.amber .pill-dot{background:var(--amber);}
+.status-badge.red{border-color:var(--red);color:var(--red);background:var(--red-dim);}
+.status-badge.red .pill-dot{background:var(--red);}
+.status-detail{color:var(--dim);font-size:8px;}
+
+/* Boot startup checks */
+#boot-checks{padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;}
+#boot-checks .boot-title{font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;margin-bottom:8px;}
+.boot-line{display:flex;align-items:center;gap:8px;padding:2px 0;font-size:9px;color:var(--muted);}
+.boot-check{width:14px;height:14px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;}
+.boot-check.ok{color:var(--green);}
+.boot-check.fail{color:var(--red);}
+.boot-check.pending{color:var(--amber);animation:dot-pulse 1s ease-in-out infinite;}
+.boot-line.ok{color:var(--text);}
+.boot-line.fail{color:var(--red);}
+
+/* Attack console */
+#attack-console{
+  flex:1;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+}
+#attack-btns-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+.atk-btn{
+  flex:1;display:flex;align-items:center;justify-content:space-between;
+  padding:0 14px;
+  background:var(--surface);border:none;border-bottom:1px solid var(--border);
+  color:var(--amber);font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  cursor:pointer;transition:background .15s,color .15s;text-align:left;position:relative;overflow:hidden;
+}
+.atk-btn::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--amber);transition:background .2s;}
+.atk-btn:hover{background:var(--amber-dim);}
+.atk-btn:hover::before{box-shadow:2px 0 8px var(--amber);}
+.atk-btn.running{background:var(--red-dim);color:var(--red);animation:btn-run .5s ease-in-out infinite alternate;}
+.atk-btn.running::before{background:var(--red);box-shadow:2px 0 10px var(--red);}
+@keyframes btn-run{from{background:var(--red-dim)}to{background:#220800}}
+.atk-btn:disabled{opacity:.3;cursor:not-allowed;}
+.atk-btn-left{display:flex;flex-direction:column;gap:2px;}
+.atk-btn-name{font-size:10px;font-weight:700;letter-spacing:.08em;}
+.atk-btn-sub{font-size:7px;color:var(--muted);font-weight:400;letter-spacing:.06em;text-transform:none;}
+.atk-btn.running .atk-btn-sub{color:var(--red);opacity:.7;}
+.atk-btn-mitre{font-size:7px;color:var(--muted2);letter-spacing:.06em;flex-shrink:0;}
+.atk-btn.running .atk-btn-mitre{color:var(--red);opacity:.5;}
+#btn-reset{background:var(--surface);border-bottom:none;color:var(--green);}
+#btn-reset::before{background:var(--green);}
+#btn-reset:hover{background:var(--green-dim);}
+
+/* ── ATTACK MODE PANEL ── */
+#attack-mode-panel{
+  display:none;
+  flex-direction:column;
+  height:100%;
+  background:var(--bg);
+  overflow:hidden;
+}
+#attack-mode-panel.visible{display:flex;}
+
+/* Attack header */
+#atk-header{
+  padding:14px 16px 10px;
+  background:var(--red-dim);
+  border-bottom:1px solid var(--red);
+  flex-shrink:0;
+}
+#atk-type-label{font-size:8px;font-weight:700;letter-spacing:.25em;color:var(--red);text-transform:uppercase;margin-bottom:6px;}
+#atk-name{font-family:var(--font-disp);font-size:26px;color:#fff;letter-spacing:.04em;line-height:1.1;text-shadow:0 0 20px var(--red-glow);}
+#atk-mitre-tag{font-size:9px;letter-spacing:.15em;color:var(--muted);margin-top:4px;}
+
+/* Live layer feed */
+#layer-feed-wrap{
+  flex:1;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  border-bottom:1px solid var(--border);
+}
+#layer-feed-header{display:flex;align-items:center;padding:5px 14px;background:var(--panel);border-bottom:1px solid var(--border);font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;flex-shrink:0;}
+#layer-feed{
+  flex:1;overflow-y:auto;padding:4px 0;
+  scrollbar-width:thin;scrollbar-color:var(--border2) transparent;
+}
+#layer-feed::-webkit-scrollbar{width:3px;}
+#layer-feed::-webkit-scrollbar-thumb{background:var(--border2);}
+
+.layer-line{
+  display:flex;align-items:baseline;gap:0;
+  padding:3px 14px;
+  font-size:16px;line-height:1.5;
+  border-left:3px solid transparent;
+  opacity:0;
+  animation:layer-appear .35s ease forwards;
+}
+@keyframes layer-appear{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:translateX(0)}}
+.layer-label{
+  font-size:9px;font-weight:700;letter-spacing:.1em;
+  text-transform:uppercase;
+  flex-shrink:0;width:80px;padding-top:3px;
+}
+.layer-text{font-size:16px;line-height:1.5;}
+
+/* Per-layer colours */
+.layer-line.attacker{border-left-color:var(--red);}
+.layer-line.attacker .layer-label{color:var(--red);}
+.layer-line.attacker .layer-text{color:#ff6644;}
+.layer-line.firewall{border-left-color:var(--amber);}
+.layer-line.firewall .layer-label{color:var(--amber);}
+.layer-line.firewall .layer-text{color:var(--amber);}
+.layer-line.plc{border-left-color:var(--muted2);}
+.layer-line.plc .layer-label{color:var(--muted);}
+.layer-line.plc .layer-text{color:var(--text);}
+.layer-line.sis{border-left-color:var(--orange);}
+.layer-line.sis .layer-label{color:var(--orange);}
+.layer-line.sis .layer-text{color:var(--orange);}
+.layer-line.cm{border-left-color:var(--green);}
+.layer-line.cm .layer-label{color:var(--green);}
+.layer-line.cm .layer-text{color:#44ee88;}
+
+/* Verdict banner */
+#verdict-banner{
+  flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;gap:12px;
+  padding:10px 16px;
+  font-family:var(--font-disp);font-size:20px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  border-top:1px solid var(--border);
+  transition:all .5s;
+  min-height:48px;
+}
+#verdict-banner.pending{color:var(--muted);background:var(--surface);border-top-color:var(--border);}
+#verdict-banner.blocked{color:var(--green);background:var(--green-dim);border-top-color:var(--green);box-shadow:0 0 30px rgba(0,204,85,.15);}
+#verdict-banner.passed{color:var(--red);background:var(--red-dim);border-top-color:var(--red);animation:badge-blink .4s ease-in-out infinite alternate;}
+
+/* ── POST-ATTACK SUMMARY ── */
+#summary-panel{
+  display:none;
+  flex-direction:column;
+  height:100%;
+  overflow:hidden;
+}
+#summary-panel.visible{display:flex;}
+#summary-header{padding:12px 16px 8px;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;}
+#summary-title{font-family:var(--font-disp);font-size:14px;letter-spacing:.1em;color:var(--amber);text-transform:uppercase;}
+#summary-subtitle{font-size:8px;color:var(--muted);margin-top:3px;}
+#summary-body{flex:1;padding:14px 16px;overflow-y:auto;}
+.summary-row{margin-bottom:12px;}
+.summary-label{font-size:8px;font-weight:700;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:4px;}
+.summary-val{font-size:12px;color:var(--text);line-height:1.6;}
+.summary-val.blocked{color:var(--green);}
+.summary-val.passed{color:var(--red);}
+#summary-countdown{font-size:8px;color:var(--muted2);text-align:center;padding:8px;border-top:1px solid var(--border);}
+
+/* ── TRAFFIC SECTION (collapsible, below both columns) ── */
+#traffic-section{
+  flex-shrink:0;
+  border-top:1px solid var(--border);
+  background:var(--surface);
+}
+#traffic-toggle{
+  display:flex;align-items:center;
+  padding:6px 14px;cursor:pointer;
+  font-size:8px;font-weight:700;letter-spacing:.15em;color:var(--muted);text-transform:uppercase;
+  background:var(--panel);border:none;width:100%;text-align:left;gap:6px;
+}
+#traffic-toggle:hover{background:var(--border);}
+#traffic-chevron{transition:transform .25s;}
+#traffic-section.open #traffic-chevron{transform:rotate(180deg);}
+#traffic-body-wrap{display:none;max-height:140px;overflow-y:auto;}
+#traffic-section.open #traffic-body-wrap{display:block;}
+#traffic-table{width:100%;border-collapse:collapse;font-size:9px;}
+#traffic-table thead th{position:sticky;top:0;background:var(--panel);padding:4px 10px;text-align:left;font-size:7px;font-weight:700;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;border-bottom:1px solid var(--border);white-space:nowrap;}
+#traffic-table tbody tr{border-bottom:1px solid var(--border);}
+#traffic-table tbody tr.pkt-block{background:#140300;}
+#traffic-table tbody tr.pkt-block td{color:var(--red);}
+#traffic-table tbody tr.pkt-allow td{color:var(--muted);}
+#traffic-table tbody td{padding:3px 10px;white-space:nowrap;}
+.verdict-block{display:inline-block;padding:1px 5px;background:var(--red-dim);border:1px solid var(--red);color:var(--red);font-size:7px;font-weight:700;letter-spacing:.1em;}
+.verdict-allow{display:inline-block;padding:1px 5px;color:var(--muted2);font-size:7px;font-weight:700;letter-spacing:.1em;border:1px solid var(--border);}
+
+/* SVG element states */
+.stage-box{transition:stroke .4s,fill .4s;}
+.stage-box.on{stroke:#00cc55 !important;}
+.stage-box.attack-stage{stroke:var(--red) !important;fill:#1a0300 !important;animation:stage-attack .5s ease-in-out infinite alternate;}
+@keyframes stage-attack{from{stroke:var(--red);filter:drop-shadow(0 0 4px rgba(255,34,0,.4))}to{stroke:#ff6644;filter:drop-shadow(0 0 12px rgba(255,34,0,.6))}}
+.coil-dot{transition:fill .4s,stroke .4s;}
+.coil-dot.on{fill:var(--green);stroke:var(--green);}
+.coil-dot.off{fill:#1c1c1c;stroke:#2a2a2a;}
+.flow-pipe{transition:stroke .5s;}
+.flow-pipe.active{stroke:var(--green);}
+.flow-pipe.inactive{stroke:#222;}
+
+/* Narrative feed (in right panel standby) */
+#standby-narrative{
+  flex:1;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  border-top:1px solid var(--border);
+}
+#standby-feed{flex:1;overflow-y:auto;padding:4px 0;scrollbar-width:thin;scrollbar-color:var(--border2) transparent;}
+#standby-feed::-webkit-scrollbar{width:3px;}
+#standby-feed::-webkit-scrollbar-thumb{background:var(--border2);}
+.log-line{display:flex;gap:0;padding:1.5px 12px;line-height:1.7;font-size:10px;white-space:nowrap;overflow:hidden;border-left:2px solid transparent;}
+.log-ts{color:var(--muted);flex-shrink:0;margin-right:4px;font-size:9px;}
+.log-icon{flex-shrink:0;width:12px;margin-right:5px;}
+.log-tag{flex-shrink:0;width:76px;font-weight:700;letter-spacing:.05em;margin-right:6px;}
+.log-msg{flex:1;overflow:hidden;text-overflow:ellipsis;}
+.log-line.attack{border-left-color:var(--red);}
+.log-line.attack .log-tag{color:var(--red);}
+.log-line.attack .log-msg{color:#ff6644;}
+.log-line.firewall .log-tag{color:var(--amber);}
+.log-line.firewall .log-msg{color:var(--amber);}
+.log-line.sis .log-tag{color:var(--orange);}
+.log-line.sis .log-msg{color:var(--orange);}
+.log-line.cm .log-tag{color:var(--green);}
+.log-line.cm .log-msg{color:#44ee88;}
+.log-line.plc .log-tag{color:var(--muted);}
+.log-line.plc .log-msg{color:var(--text);}
+.log-line.system .log-tag{color:var(--blue);}
+.log-line.system .log-msg{color:#66aaff;}
+
+/* ══ DEFENSE MODAL ══ */
+#defm-backdrop{
+  position:fixed;inset:0;background:rgba(0,0,0,.85);
+  z-index:9000;display:none;
+  align-items:center;justify-content:center;
+}
+#defm-backdrop.open{display:flex;}
+#defm-box{
+  width:min(660px,92vw);max-height:86vh;
+  background:#0d0d0d;border:1px solid #00cc55;
+  box-shadow:0 0 50px rgba(0,204,85,.2);
+  display:flex;flex-direction:column;font-family:'JetBrains Mono','Courier New',monospace;
+}
+#defm-hdr{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  padding:12px 16px 10px;background:#111;border-bottom:1px solid #00cc55;flex-shrink:0;
+}
+#defm-hdr-left{}
+#defm-label{font-size:8px;font-weight:700;letter-spacing:.2em;color:#00cc55;text-transform:uppercase;}
+#defm-atk{font-size:16px;color:#fff;letter-spacing:.05em;margin-top:3px;}
+#defm-close{
+  background:none;border:1px solid #333;color:#666;
+  width:28px;height:28px;cursor:pointer;font-size:14px;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  font-family:inherit;transition:border-color .15s,color .15s;
+}
+#defm-close:hover{border-color:#ff2200;color:#ff2200;}
+#defm-body{flex:1;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#222 transparent;}
+.defm-row{padding:10px 16px;border-bottom:1px solid #1a1a1a;}
+.defm-row:last-child{border-bottom:none;}
+.defm-lbl{font-size:7px;font-weight:700;letter-spacing:.18em;color:#555;text-transform:uppercase;margin-bottom:5px;}
+.defm-chip{
+  display:inline-block;padding:3px 8px;border:1px solid;
+  font-size:8px;font-weight:700;letter-spacing:.1em;margin-right:4px;
+}
+.defm-chip.fw{border-color:#ffaa00;color:#ffaa00;background:#1f1400;}
+.defm-chip.sis{border-color:#ff6600;color:#ff6600;background:#110500;}
+.defm-chip.cm{border-color:#00cc55;color:#00cc55;background:#001a0b;}
+.defm-chip.iec{border-color:#aa44ff;color:#aa44ff;background:#0d001a;}
+.defm-detail{font-size:8px;color:#666;margin-top:4px;line-height:1.6;}
+.defm-text{font-size:9px;color:#d4d4d4;line-height:1.7;}
+.defm-rw{margin-top:7px;padding:8px 10px;border-left:2px solid #ff2200;background:rgba(255,34,0,.05);}
+.defm-rw-lbl{font-size:7px;font-weight:700;letter-spacing:.14em;color:#ff2200;text-transform:uppercase;margin-bottom:3px;}
+.defm-rw-txt{font-size:8px;color:#ff7755;line-height:1.65;}
+#defm-ftr{
+  padding:9px 16px;border-top:1px solid #1a1a1a;background:#0a0a0a;
+  display:flex;align-items:center;justify-content:space-between;flex-shrink:0;
+}
+#defm-ftr-note{font-size:7px;color:#333;letter-spacing:.08em;}
+#defm-ftr-btn{
+  padding:6px 20px;background:none;border:1px solid #00cc55;
+  color:#00cc55;font-family:inherit;font-size:8px;font-weight:700;
+  letter-spacing:.14em;text-transform:uppercase;cursor:pointer;
+}
+#defm-ftr-btn:hover{background:#001a0b;}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <div id="tb-title">MUNICIPAL WATER TREATMENT PLANT<span>|</span>SCADA TERMINAL</div>
+  <div id="tb-pills">
+    <div class="pill green" id="pill-plc"><span class="pill-dot"></span>PLC CONNECTED</div>
+    <div class="pill amber" id="pill-fw"><span class="pill-dot"></span>FIREWALL CHECKING</div>
+    <div class="pill green" id="pill-sis"><span class="pill-dot"></span>SIS ACTIVE</div>
+    <div id="mode-badge">STANDBY</div>
+  </div>
+  <div id="tb-right">
+    <div id="clock">00:00:00</div>
+    <div id="datestamp">——</div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="columns">
+
+    <!-- ══ LEFT COLUMN ══ -->
+    <div id="left-col">
+
+      <!-- Plant diagram -->
+      <div id="plant-area">
+        <div id="hero-label">PROCESS FLOW — REAL-TIME PLC STATE<span id="live-dot"></span></div>
+
+        <svg id="plant-svg" viewBox="0 0 900 260" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <filter id="glow-green" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="3" result="blur"/>
+              <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+            <marker id="arr-off" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M1 2L8 5L1 8" fill="none" stroke="#222" stroke-width="1.5"/>
+            </marker>
+            <marker id="arr-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M1 2L8 5L1 8" fill="none" stroke="#00cc55" stroke-width="1.5"/>
+            </marker>
+            <marker id="arr-attack" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+              <path d="M1 2L8 5L1 8" fill="none" stroke="#ff2200" stroke-width="1.5"/>
+            </marker>
+          </defs>
+
+          <!-- RAW WATER SOURCE -->
+          <text x="14" y="124" font-size="8" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle" letter-spacing="1">RAW</text>
+          <text x="14" y="135" font-size="8" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle" letter-spacing="1">WATER</text>
+          <circle cx="14" cy="150" r="10" fill="none" stroke="#222" stroke-width="1.5"/>
+          <text x="14" y="154" font-size="8" font-family="'JetBrains Mono',monospace" fill="#444" text-anchor="middle">~</text>
+          <line id="pipe-src" class="flow-pipe inactive" x1="24" y1="150" x2="50" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 1: INTAKE -->
+          <g id="stage-intake">
+            <rect id="box-intake" class="stage-box" x="52" y="110" width="120" height="80" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="112" y="133" font-family="'Share Tech Mono',monospace" font-size="13" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">INTAKE</text>
+            <text x="112" y="147" font-family="'JetBrains Mono',monospace" font-size="8" fill="#444" text-anchor="middle" letter-spacing="1">PUMP + VALVE</text>
+            <circle id="dot-0" class="coil-dot off" cx="80" cy="170" r="5" stroke-width="1.5"/>
+            <text x="80" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">PMP</text>
+            <circle id="dot-1" class="coil-dot off" cx="112" cy="170" r="5" stroke-width="1.5"/>
+            <text x="112" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">VLV</text>
+            <text x="162" y="118" font-size="8" font-family="'JetBrains Mono',monospace" fill="#222" text-anchor="middle">01</text>
+          </g>
+          <line id="pipe-0" class="flow-pipe inactive" x1="172" y1="150" x2="198" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 2: DOSING -->
+          <g id="stage-dosing">
+            <rect id="box-dosing" class="stage-box" x="200" y="110" width="120" height="80" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="260" y="133" font-family="'Share Tech Mono',monospace" font-size="13" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">DOSING</text>
+            <text x="260" y="147" font-family="'JetBrains Mono',monospace" font-size="8" fill="#444" text-anchor="middle" letter-spacing="1">Cl⁻ + COAG</text>
+            <circle id="dot-2" class="coil-dot off" cx="228" cy="170" r="5" stroke-width="1.5"/>
+            <text x="228" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">Cl⁻</text>
+            <circle id="dot-3" class="coil-dot off" cx="260" cy="170" r="5" stroke-width="1.5"/>
+            <text x="260" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">COA</text>
+            <circle id="dot-4" class="coil-dot off" cx="292" cy="170" r="4" stroke-width="1.5"/>
+            <text x="292" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">EN</text>
+            <rect x="210" y="155" width="100" height="4" fill="#111" stroke="#222" stroke-width="0.5"/>
+            <rect id="cl-bar" x="210" y="155" width="20" height="4" fill="#00cc55"/>
+            <text x="264" y="162" font-family="'JetBrains Mono',monospace" font-size="6" fill="#333" text-anchor="middle" id="cl-val-svg">Cl: 200</text>
+            <text x="316" y="118" font-size="8" font-family="'JetBrains Mono',monospace" fill="#222" text-anchor="middle">02</text>
+          </g>
+          <line id="pipe-1" class="flow-pipe inactive" x1="320" y1="150" x2="346" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 3: FILTER -->
+          <g id="stage-filter">
+            <rect id="box-filter" class="stage-box" x="348" y="110" width="120" height="80" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="408" y="133" font-family="'Share Tech Mono',monospace" font-size="13" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">FILTER</text>
+            <text x="408" y="147" font-family="'JetBrains Mono',monospace" font-size="8" fill="#444" text-anchor="middle" letter-spacing="1">SAND MEDIA</text>
+            <circle id="dot-5" class="coil-dot off" cx="392" cy="170" r="5" stroke-width="1.5"/>
+            <text x="392" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">FLT</text>
+            <text x="462" y="118" font-size="8" font-family="'JetBrains Mono',monospace" fill="#222" text-anchor="middle">03</text>
+          </g>
+          <line id="pipe-2" class="flow-pipe inactive" x1="468" y1="150" x2="494" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 4: UV DISINFECT -->
+          <g id="stage-uv">
+            <rect id="box-uv" class="stage-box" x="496" y="110" width="120" height="80" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="556" y="133" font-family="'Share Tech Mono',monospace" font-size="11" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">UV DISINFECT</text>
+            <text x="556" y="147" font-family="'JetBrains Mono',monospace" font-size="8" fill="#444" text-anchor="middle" letter-spacing="1">253.7 nm LAMP</text>
+            <circle id="dot-6" class="coil-dot off" cx="540" cy="170" r="5" stroke-width="1.5"/>
+            <text x="540" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">UV</text>
+            <text x="610" y="118" font-size="8" font-family="'JetBrains Mono',monospace" fill="#222" text-anchor="middle">04</text>
+          </g>
+          <line id="pipe-3" class="flow-pipe inactive" x1="616" y1="150" x2="642" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 5: RESERVOIR -->
+          <g id="stage-reservoir">
+            <rect id="box-reservoir" class="stage-box" x="644" y="80" width="100" height="140" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="694" y="100" font-family="'Share Tech Mono',monospace" font-size="11" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">RESERVOIR</text>
+            <rect x="656" y="108" width="76" height="88" fill="#0a0a0a" stroke="#1e1e1e" stroke-width="1"/>
+            <rect id="res-fill" x="657" y="160" width="74" height="35" fill="#001a0b"/>
+            <text id="res-pct" x="694" y="185" font-family="'Share Tech Mono',monospace" font-size="16" fill="#00cc55" text-anchor="middle" font-weight="bold">50%</text>
+            <line x1="656" y1="121" x2="660" y2="121" stroke="#222" stroke-width="1"/>
+            <text x="663" y="124" font-size="6" font-family="'JetBrains Mono',monospace" fill="#222">90%</text>
+            <line x1="656" y1="143" x2="660" y2="143" stroke="#222" stroke-width="1"/>
+            <text x="663" y="146" font-size="6" font-family="'JetBrains Mono',monospace" fill="#222">50%</text>
+            <line x1="656" y1="185" x2="660" y2="185" stroke="#222" stroke-width="1"/>
+            <text x="663" y="188" font-size="6" font-family="'JetBrains Mono',monospace" fill="#222">10%</text>
+            <circle id="dot-7" class="coil-dot off" cx="662" cy="204" r="4" stroke-width="1.5"/>
+            <text x="662" y="214" font-size="6" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">IN</text>
+            <circle id="dot-8" class="coil-dot off" cx="680" cy="204" r="4" stroke-width="1.5"/>
+            <text x="680" y="214" font-size="6" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">OUT</text>
+            <circle id="dot-9" class="coil-dot off" cx="698" cy="204" r="4" stroke-width="1.5"/>
+            <text x="698" y="214" font-size="6" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">PMP</text>
+            <text x="738" y="88" font-size="8" font-family="'JetBrains Mono',monospace" fill="#222" text-anchor="middle">05</text>
+          </g>
+          <line id="pipe-4" class="flow-pipe inactive" x1="744" y1="150" x2="770" y2="150" stroke="#222" stroke-width="2" marker-end="url(#arr-off)"/>
+
+          <!-- STAGE 6: DISTRIBUTION -->
+          <g id="stage-dist">
+            <rect id="box-dist" class="stage-box" x="772" y="110" width="108" height="80" fill="#111" stroke="#222" stroke-width="1.5"/>
+            <text x="826" y="133" font-family="'Share Tech Mono',monospace" font-size="11" fill="#ccc" text-anchor="middle" font-weight="bold" letter-spacing="2">DIST</text>
+            <text x="826" y="147" font-family="'JetBrains Mono',monospace" font-size="8" fill="#444" text-anchor="middle" letter-spacing="1">CITY GRID</text>
+            <circle id="dot-9b" class="coil-dot off" cx="800" cy="170" r="5" stroke-width="1.5"/>
+            <text x="800" y="183" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle">PMP</text>
+            <rect x="780" y="155" width="88" height="4" fill="#111" stroke="#222" stroke-width="0.5"/>
+            <rect id="speed-bar" x="780" y="155" width="44" height="4" fill="#00cc55"/>
+            <text x="826" y="162" font-family="'JetBrains Mono',monospace" font-size="6" fill="#333" text-anchor="middle" id="spd-val-svg">SPD: 50%</text>
+          </g>
+
+          <!-- SYSTEM INDICATORS -->
+          <g id="alarm-ind" opacity="0.15">
+            <rect x="814" y="50" width="82" height="20" fill="#1a0300" stroke="#ff2200" stroke-width="1"/>
+            <circle cx="823" cy="60" r="4" fill="#ff2200"/>
+            <text x="832" y="64" font-size="8" font-family="'JetBrains Mono',monospace" fill="#ff2200" font-weight="700" letter-spacing="2">ALARM</text>
+          </g>
+          <g id="sys-ind">
+            <rect x="814" y="74" width="82" height="16" fill="#111" stroke="#222" stroke-width="1"/>
+            <text id="sys-text" x="855" y="85" font-size="7" font-family="'JetBrains Mono',monospace" fill="#333" text-anchor="middle" letter-spacing="1">SYS: OFFLINE</text>
+          </g>
+          <text x="450" y="30" font-family="'JetBrains Mono',monospace" font-size="8" fill="#1e1e1e" text-anchor="middle" letter-spacing="3">MUNICIPAL WATER TREATMENT PROCESS — IEC 61131-3 PLC CONTROL</text>
+        </svg>
+      </div><!-- /plant-area -->
+
+      <!-- Parameters -->
+      <div id="params-area">
+        <div class="sec-hdr">
+          <span class="sec-hdr-acc">▸</span>PROCESS PARAMETERS
+          <span class="sec-hdr-right" id="param-ts">——</span>
+        </div>
+        <div id="params-grid">
+
+          <div class="param-cell" id="pc-chlorine">
+            <div>
+              <div class="param-name">CHLORINE DOSE</div>
+              <div class="param-range">SAFE 0 – 800 ppm</div>
+            </div>
+            <div class="param-val" id="pv-chlorine">200<span class="param-unit">ppm</span></div>
+            <div class="param-bar"><div class="param-bar-fill" id="pb-chlorine" style="width:20%"></div></div>
+          </div>
+
+          <div class="param-cell" id="pc-coagulant">
+            <div>
+              <div class="param-name">COAGULANT DOSE</div>
+              <div class="param-range">SAFE 0 – 600 mg/L</div>
+            </div>
+            <div class="param-val" id="pv-coagulant">300<span class="param-unit">mg/L</span></div>
+            <div class="param-bar"><div class="param-bar-fill" id="pb-coagulant" style="width:30%"></div></div>
+          </div>
+
+          <div class="param-cell" id="pc-distspeed">
+            <div>
+              <div class="param-name">DISTRIBUTION SPEED</div>
+              <div class="param-range">SAFE 20 – 80 %</div>
+            </div>
+            <div class="param-val" id="pv-distspeed">50<span class="param-unit">%</span></div>
+            <div class="param-bar"><div class="param-bar-fill" id="pb-distspeed" style="width:50%"></div></div>
+          </div>
+
+          <div class="param-cell" id="pc-reservoir">
+            <div>
+              <div class="param-name">RESERVOIR LEVEL</div>
+              <div class="param-range">SAFE 10 – 90 %</div>
+            </div>
+            <div class="param-val" id="pv-reservoir">50<span class="param-unit">%</span></div>
+            <div class="param-bar"><div class="param-bar-fill" id="pb-reservoir" style="width:50%"></div></div>
+          </div>
+
+        </div>
+
+        <div id="alarm-strip">
+          <span id="alarm-icon">◆</span>
+          <span id="alarm-text">ALL CLEAR — NO ACTIVE ALARMS</span>
+        </div>
+      </div><!-- /params-area -->
+
+    </div><!-- /left-col -->
+
+    <!-- ══ RIGHT COLUMN ══ -->
+    <div id="right-col">
+
+      <!-- STANDBY STATE -->
+      <div id="standby-panel">
+        <div id="status-section">
+          <div class="sec-label">SYSTEM STATUS</div>
+          <div id="status-pills-col">
+            <div class="status-row">
+              <div class="status-badge green" id="sbadge-plc">
+                <span class="pill-dot"></span>PLC CONNECTED
+              </div>
+              <span class="status-detail">127.0.0.1:502</span>
+            </div>
+            <div class="status-row">
+              <div class="status-badge amber" id="sbadge-fw">
+                <span class="pill-dot"></span>FIREWALL CHECKING
+              </div>
+              <span class="status-detail" id="fw-detail">127.0.0.1:5502</span>
+            </div>
+            <div class="status-row">
+              <div class="status-badge green" id="sbadge-sis">
+                <span class="pill-dot"></span>SIS ACTIVE
+              </div>
+              <span class="status-detail">7 rules armed</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Boot sequence checks -->
+        <div id="boot-checks">
+          <div class="boot-title">STARTUP CHECKS</div>
+          <div class="boot-line" id="boot-plc">
+            <span class="boot-check pending" id="boot-plc-icon">◌</span>
+            <span id="boot-plc-text">PLC — connecting to 127.0.0.1:502</span>
+          </div>
+          <div class="boot-line" id="boot-fw">
+            <span class="boot-check pending" id="boot-fw-icon">◌</span>
+            <span id="boot-fw-text">Firewall — checking 127.0.0.1:5502</span>
+          </div>
+          <div class="boot-line" id="boot-vals">
+            <span class="boot-check pending" id="boot-vals-icon">◌</span>
+            <span id="boot-vals-text">Nominal values — pending PLC connection</span>
+          </div>
+        </div>
+
+        <!-- Attack console -->
+        <div id="attack-console">
+          <div class="sec-hdr">
+            <span class="sec-hdr-acc">▸</span>ATTACK CONSOLE
+            <span class="sec-hdr-right">DIRECT MODBUS WRITE</span>
+          </div>
+          <div id="attack-btns-wrap">
+            <button class="atk-btn" id="btn-overdose" onclick="launchAttack('overdose')">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">CHLORINE OVERDOSE</div>
+                <div class="atk-btn-sub">HR0 → 1000 ppm · sustained 6s</div>
+              </div>
+              <span class="atk-btn-mitre">T0831</span>
+            </button>
+            <button class="atk-btn" id="btn-suppress" onclick="launchAttack('suppress')">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">ALARM SUPPRESS</div>
+                <div class="atk-btn-sub">Coil 10 forced OFF · Oldsmar pattern</div>
+              </div>
+              <span class="atk-btn-mitre">T0838</span>
+            </button>
+            <button class="atk-btn" id="btn-blackout" onclick="launchAttack('blackout')">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">SYSTEM BLACKOUT</div>
+                <div class="atk-btn-sub">All 12 coils → FALSE · plant stops</div>
+              </div>
+              <span class="atk-btn-mitre">T0816</span>
+            </button>
+            <button class="atk-btn" id="btn-overflow" onclick="launchAttack('overflow')">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">TANK OVERFLOW</div>
+                <div class="atk-btn-sub">Inlet forced ON, level spoofed → 0</div>
+              </div>
+              <span class="atk-btn-mitre">T0803</span>
+            </button>
+            <button class="atk-btn" id="btn-logic" onclick="launchAttack('logic')">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">SLOW DRIFT / LOGIC INJECT</div>
+                <div class="atk-btn-sub">15-step Cl drift · evades threshold alarms</div>
+              </div>
+              <span class="atk-btn-mitre">T0873</span>
+            </button>
+            <button class="atk-btn" id="btn-reset" onclick="resetPLC()">
+              <div class="atk-btn-left">
+                <div class="atk-btn-name">RESTORE SAFE STATE</div>
+                <div class="atk-btn-sub">Reset all registers + coils to nominal</div>
+              </div>
+              <span class="atk-btn-mitre">RST</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Narrative feed (standby) -->
+        <div id="standby-narrative">
+          <div class="sec-hdr">
+            <span class="sec-hdr-acc">▸</span>LIVE NARRATIVE FEED
+            <span class="sec-hdr-right" id="feed-count">0 EVENTS</span>
+          </div>
+          <div id="standby-feed"></div>
+        </div>
+
+      </div><!-- /standby-panel -->
+
+      <!-- ATTACK MODE (auto-transitions in) -->
+      <div id="attack-mode-panel">
+        <div id="atk-header">
+          <div id="atk-type-label">ACTIVE ATTACK — MITRE ATT&amp;CK ICS</div>
+          <div id="atk-name">CHLORINE OVERDOSE</div>
+          <div id="atk-mitre-tag">T0831 · MANIPULATION OF CONTROL</div>
+        </div>
+
+        <div id="layer-feed-wrap">
+          <div id="layer-feed-header">
+            <span style="color:var(--amber);margin-right:6px;">▸</span>LAYER-BY-LAYER TRACE
+          </div>
+          <div id="layer-feed"></div>
+        </div>
+
+        <div id="verdict-banner" class="pending">● AWAITING DEFENSE VERDICT</div>
+      </div>
+
+      <!-- POST-ATTACK SUMMARY (shown for 10s after attack) -->
+      <div id="summary-panel">
+        <div id="summary-header">
+          <div id="summary-title">POST-ATTACK SUMMARY</div>
+          <div id="summary-subtitle">Defense layer assessment</div>
+        </div>
+        <div id="summary-body">
+          <div class="summary-row">
+            <div class="summary-label">ATTACK ATTEMPTED</div>
+            <div class="summary-val" id="sum-attempted">—</div>
+          </div>
+          <div class="summary-row">
+            <div class="summary-label">DEFENSE LAYER THAT RESPONDED</div>
+            <div class="summary-val" id="sum-defense">—</div>
+          </div>
+          <div class="summary-row">
+            <div class="summary-label">PLC STATE NOW</div>
+            <div class="summary-val" id="sum-plc-state">—</div>
+          </div>
+          <div class="summary-row">
+            <div class="summary-label">OUTCOME</div>
+            <div class="summary-val" id="sum-outcome">—</div>
+          </div>
+        </div>
+        <div id="defm-btn-wrap" style="padding:0 16px 8px;display:none;">
+          <button id="defm-open-btn" onclick="defmOpen()"
+            style="width:100%;padding:10px 14px;background:#001a0b;border:1px solid #00cc55;
+                   color:#00cc55;font-family:'JetBrains Mono',monospace;font-size:9px;
+                   font-weight:700;letter-spacing:.14em;text-transform:uppercase;
+                   cursor:pointer;text-align:left;">
+            ◈&nbsp; DEFENSE &amp; MITIGATION — VIEW ANALYSIS &nbsp;<span style="float:right">→</span>
+          </button>
+        </div>
+        <div id="summary-countdown">Returning to STANDBY in <span id="sum-timer">10</span>s…</div>
+      </div>
+
+    </div><!-- /right-col -->
+
+  </div><!-- /columns -->
+
+  <!-- COLLAPSIBLE TRAFFIC TABLE -->
+  <div id="traffic-section">
+    <button id="traffic-toggle" onclick="toggleTraffic()">
+      <span style="color:var(--amber)">▸</span>
+      MODBUS TRAFFIC
+      <span style="margin-left:6px;color:var(--muted2)">LAST 8 PACKETS</span>
+      <span style="margin-left:auto;font-size:10px;" id="traffic-chevron">▼</span>
+    </button>
+    <div id="traffic-body-wrap">
+      <table id="traffic-table">
+        <thead>
+          <tr><th>TIME</th><th>FC</th><th>REGISTER</th><th>VALUE</th><th>VERDICT</th></tr>
+        </thead>
+        <tbody id="traffic-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<script>
+'use strict';
+
+/* ══ CONSTANTS ══ */
+const REG_META = [
+  { id:'chlorine',  name:'Chlorine Dose',     safeMax:800, safeMin:0,  max:1000, unit:'ppm',  svgBarId:'cl-bar',    svgValId:'cl-val-svg',  svgBarMax:100 },
+  { id:'coagulant', name:'Coagulant Dose',     safeMax:600, safeMin:0,  max:1000, unit:'mg/L', svgBarId:null,        svgValId:null,           svgBarMax:null },
+  { id:'distspeed', name:'Distribution Speed', safeMax:80,  safeMin:20, max:100,  unit:'%',    svgBarId:'speed-bar', svgValId:'spd-val-svg',  svgBarMax:88 },
+  { id:'reservoir', name:'Reservoir Level',    safeMax:90,  safeMin:10, max:100,  unit:'%',    svgBarId:null,        svgValId:null,           svgBarMax:null },
+];
+const COIL_DOT = {0:'dot-0',1:'dot-1',2:'dot-2',3:'dot-3',4:'dot-4',5:'dot-5',6:'dot-6',7:'dot-7',8:'dot-8',9:'dot-9'};
+const FC_LABEL = {READ_COILS:'FC01',READ_DISCRETE_INPUTS:'FC02',READ_HOLDING_REGISTERS:'FC03',READ_INPUT_REGISTERS:'FC04',WRITE_SINGLE_COIL:'FC05',WRITE_SINGLE_REGISTER:'FC06',WRITE_MULTIPLE_COILS:'FC15',WRITE_MULTIPLE_REGISTERS:'FC16'};
+const pad = n => String(n).padStart(2,'0');
+function tsNow(){const n=new Date();return`[${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}]`;}
+
+const ATTACKS = {
+  overdose:{
+    endpoint:'/attacker/attack/chemical_overdose', body:{dose:1000,duration:6},
+    btnId:'btn-overdose', name:'CHLORINE OVERDOSE', mitre:'T0831 · MANIPULATION OF CONTROL',
+    stage:'dosing',
+    layers:[
+      {cls:'attacker', label:'ATTACKER', text:'Writing Chlorine_Dose=1000 to HR0 via Modbus FC06'},
+      {cls:'firewall', label:'FIREWALL', text:'VAL-001 evaluating — overdose limit 800, incoming value=1000'},
+      {cls:'plc',      label:'PLC',      text:'HR0 register write attempt received'},
+      {cls:'sis',      label:'SIS',      text:'Cl>700 hard limit — SIS-1 would trip if write succeeds'},
+      {cls:'cm',       label:'CM',       text:'Z-score anomaly armed — deviation from baseline detected'},
+    ],
+    summary:{attempted:'Chemical overdose: HR0 → 1000 ppm (safe limit 800)', defense:'FIREWALL VAL-001 — Chlorine_Dose range enforcement'},
+  },
+  suppress:{
+    endpoint:'/attacker/attack/alarm_suppress', body:{duration:6},
+    btnId:'btn-suppress', name:'ALARM SUPPRESSION', mitre:'T0838 · ALARM SUPPRESSION / DISABLING',
+    stage:'intake',
+    layers:[
+      {cls:'attacker', label:'ATTACKER', text:'Forcing Coil 10 (Alarm_LED) → OFF via Modbus FC05'},
+      {cls:'attacker', label:'ATTACKER', text:'Oldsmar 2021 pattern — sustained write loop for 6 seconds'},
+      {cls:'firewall', label:'FIREWALL', text:'INT-001 evaluating — alarm suppression block rule active'},
+      {cls:'plc',      label:'PLC',      text:'Alarm_LED coil write attempt intercepted at proxy'},
+      {cls:'sis',      label:'SIS',      text:'SIS-2 cross-check: elevated Cl + Alarm=OFF = suspicious'},
+      {cls:'cm',       label:'CM',       text:'Coil anomaly: Alarm_LED held OFF with elevated registers'},
+    ],
+    summary:{attempted:'Alarm suppression: Coil 10 forced OFF (hides active alarms)', defense:'FIREWALL INT-001 — alarm suppression block'},
+  },
+  blackout:{
+    endpoint:'/attacker/attack/blackout', body:{duration:6},
+    btnId:'btn-blackout', name:'SYSTEM BLACKOUT', mitre:'T0816 · DEVICE RESTART / SHUTDOWN',
+    stage:'all',
+    layers:[
+      {cls:'attacker', label:'ATTACKER', text:'Writing FC15 — all 12 coils → FALSE in one packet'},
+      {cls:'attacker', label:'ATTACKER', text:'Intake, dosing, UV, distribution ALL forced off'},
+      {cls:'firewall', label:'FIREWALL', text:'INT-002 evaluating — bulk coil-OFF pattern detection'},
+      {cls:'plc',      label:'PLC',      text:'FC15 write_multiple_coils(0, [F,F,F,F,F,F,F,F,F,F,F,F])'},
+      {cls:'sis',      label:'SIS',      text:'System_Enable=OFF — SIS-3 shutdown flag armed'},
+      {cls:'cm',       label:'CM',       text:'Mass-coil-OFF: all 12 false simultaneously — critical pattern'},
+    ],
+    summary:{attempted:'System blackout: all 12 coils forced FALSE — total plant stop', defense:'FIREWALL INT-002 — bulk coil write block'},
+  },
+  overflow:{
+    endpoint:'/attacker/attack/tank_overflow', body:{duration:6},
+    btnId:'btn-overflow', name:'TANK OVERFLOW', mitre:'T0803 · BLOCK REPORTING MESSAGE',
+    stage:'reservoir',
+    layers:[
+      {cls:'attacker', label:'ATTACKER', text:'Forcing Reservoir_Inlet (Coil 7) → ON via FC05'},
+      {cls:'attacker', label:'ATTACKER', text:'Spoofing Reservoir_Level_Pct (HR3) → 0 via FC06'},
+      {cls:'attacker', label:'ATTACKER', text:'Physical level rising while control system sees empty tank'},
+      {cls:'firewall', label:'FIREWALL', text:'INT-003 evaluating — reservoir inlet + level spoof sequence'},
+      {cls:'plc',      label:'PLC',      text:'Inlet=ON, Level=0 sustained — overflow condition created'},
+      {cls:'sis',      label:'SIS',      text:'SIS-4 overflow flag: inlet forced with spoofed low level'},
+      {cls:'cm',       label:'CM',       text:'Correlation anomaly: inlet ON + sensor=0 simultaneous'},
+    ],
+    summary:{attempted:'Tank overflow: Coil 7 forced ON + HR3 spoofed to 0', defense:'FIREWALL INT-003 — suspicious sequence alert'},
+  },
+  logic:{
+    endpoint:'/attacker/attack/slow_drift', body:{steps:15},
+    btnId:'btn-logic', name:'SLOW DRIFT / LOGIC INJECT', mitre:'T0873 · PROJECT FILE INFECTION',
+    stage:'dosing',
+    layers:[
+      {cls:'attacker', label:'ATTACKER', text:'15-step graduated drift: Cl +10/step every 2 seconds'},
+      {cls:'attacker', label:'ATTACKER', text:'Each step individually below threshold — evades simple alarms'},
+      {cls:'firewall', label:'FIREWALL', text:'VAL-001 watching — each write within safe range [0-800]'},
+      {cls:'plc',      label:'PLC',      text:'Step 1/15 — Cl: 200→210, Speed: 50→47'},
+      {cls:'plc',      label:'PLC',      text:'Step 3/15 — Cl: 230, Speed: 44 — no alarm yet'},
+      {cls:'plc',      label:'PLC',      text:'Step 5/15 — Cl: 250, Speed: 41 — operator sees nothing'},
+      {cls:'cm',       label:'CM',       text:'RoC detector: Cl rising +10/2s — Z-score building'},
+      {cls:'plc',      label:'PLC',      text:'Step 8/15 — Cl: 280 — CM-6 Z-score threshold crossed'},
+      {cls:'cm',       label:'CM',       text:'ANOMALY FLAGGED — Cl drifted 80 units in 16s — RoC alert'},
+      {cls:'plc',      label:'PLC',      text:'Step 12/15 — Cl: 320 — still no threshold alarm'},
+      {cls:'sis',      label:'SIS',      text:'SIS watching — Cl still below 700 hard limit'},
+      {cls:'plc',      label:'PLC',      text:'Step 15/15 — Cl: 350, Speed: 38 — attack complete'},
+      {cls:'cm',       label:'CM',       text:'Total drift: 150ppm over 30s — simple alarm never fired'},
+    ],
+  },
+};
+
+/* ══ CLOCK ══ */
+function updateClock(){
+  const n=new Date();
+  document.getElementById('clock').textContent=`${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+  const DAYS=['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+  document.getElementById('datestamp').textContent=`${DAYS[n.getDay()]} ${n.getFullYear()}-${pad(n.getMonth()+1)}-${pad(n.getDate())}`;
+}
+updateClock(); setInterval(updateClock,1000);
+
+/* ══ TRAFFIC TABLE TOGGLE ══ */
+function toggleTraffic(){
+  document.getElementById('traffic-section').classList.toggle('open');
+}
+
+/* ══ PLC SSE ══ */
+let _sseSrc=null, _sseRetry=null, _wasConnected=null, _lastRegs=null, _lastCoils=null;
+let _bootPLCDone=false, _bootValsDone=false;
+
+function connectSSE(){
+  if(_sseSrc){_sseSrc.close();_sseSrc=null;}
+  _sseSrc=new EventSource('/hmi/stream');
+  _sseSrc.onmessage=function(e){ try{applyPLCState(JSON.parse(e.data));}catch(err){} };
+  _sseSrc.onerror=function(){
+    setConnectionStatus(false);
+    _sseSrc.close();_sseSrc=null;
+    clearTimeout(_sseRetry);_sseRetry=setTimeout(connectSSE,3000);
+  };
+}
+
+function setConnectionStatus(ok){
+  if(ok===_wasConnected) return; _wasConnected=ok;
+  const pill=document.getElementById('pill-plc');
+  const sb=document.getElementById('sbadge-plc');
+  if(ok){
+    pill.className='pill green'; pill.innerHTML='<span class="pill-dot"></span>PLC CONNECTED';
+    sb.className='status-badge green'; sb.innerHTML='<span class="pill-dot"></span>PLC CONNECTED';
+    if(!_bootPLCDone){ setBoot('plc','ok','PLC connected on 127.0.0.1:502'); _bootPLCDone=true; }
+  } else {
+    pill.className='pill red'; pill.innerHTML='<span class="pill-dot"></span>PLC OFFLINE';
+    sb.className='status-badge red'; sb.innerHTML='<span class="pill-dot"></span>PLC OFFLINE';
+  }
+}
+
+function applyPLCState(data){
+  const coils=data.coils||[], regs=data.regs||[], ts=data.ts||'';
+  setConnectionStatus(true);
+  const ptsel=document.getElementById('param-ts'); if(ptsel) ptsel.textContent=ts;
+
+  regs.forEach((v,i)=>updateParam(i,v));
+  updateReservoirSVG(regs[3]||0);
+  Object.entries(COIL_DOT).forEach(([idx,dotId])=>setCoilDot(dotId,coils[parseInt(idx)]));
+  setCoilDot('dot-9b',coils[9]);
+  setPipe('pipe-src',coils[0]||coils[1]);
+  setPipe('pipe-0',coils[0]||coils[1]);
+  setPipe('pipe-1',coils[2]||coils[3]);
+  setPipe('pipe-2',coils[5]);
+  setPipe('pipe-3',coils[6]);
+  setPipe('pipe-4',coils[7]||coils[8]||coils[9]);
+
+  const sysEl=document.getElementById('sys-text');
+  if(sysEl){ sysEl.textContent=coils[11]?'SYS: ENABLED':'SYS: OFFLINE'; sysEl.setAttribute('fill',coils[11]?'#00cc55':'#333'); }
+  setAlarmState(coils[10]===true);
+  document.getElementById('alarm-ind').setAttribute('opacity',coils[10]?'1':'0.15');
+
+  // Boot check: nominal values
+  if(!_bootValsDone && _bootPLCDone){
+    const hasVals=regs[0]>0||regs[1]>0||regs[2]>0||regs[3]>0;
+    if(hasVals){
+      setBoot('vals','ok',`Nominal values written: Cl=${regs[0]}, Coag=${regs[1]}, Speed=${regs[2]}, Level=${regs[3]}`);
+      _bootValsDone=true;
+    }
+  }
+
+  if(_lastRegs){ regs.forEach((v,i)=>{ if(v!==_lastRegs[i]){ const m=REG_META[i]; const over=v>m.safeMax; addLog(over?'attack':'plc',over?'⚠':'●','PLC',`${m.name}: ${_lastRegs[i]}→${v}${over?` ⚠ exceeds ${m.safeMax}`:''}`); } }); }
+  if(_lastCoils){ coils.forEach((v,i)=>{ if(v!==_lastCoils[i]){ const CNAMES=['Intake_Pump','Intake_Valve','Chlorine_Pump','Coagulant_Pump','Dosing_Enable','Filter_Valve','UV_System','Reservoir_Inlet','Reservoir_Outlet','Distribution_Pump','Alarm_LED','System_Enable']; addLog('plc',v?'▲':'▼','PLC',`${CNAMES[i]}→${v?'ON':'OFF'}`); } }); }
+  _lastRegs=[...regs]; _lastCoils=[...coils];
+}
+
+function updateParam(idx,value){
+  const m=REG_META[idx];
+  const pv=document.getElementById('pv-'+m.id);
+  const pb=document.getElementById('pb-'+m.id);
+  const pc=document.getElementById('pc-'+m.id);
+  if(!pv||!pb) return;
+  let state='safe';
+  if(value>m.safeMax) state='crit';
+  else if(value>m.safeMax*.9) state='warn';
+  else if(m.safeMin>0 && value<m.safeMin) state='warn';
+  const pct=Math.min(100,Math.max(0,Math.round((value/m.max)*100)));
+  pb.style.width=pct+'%';
+  pb.className='param-bar-fill'+(state==='crit'?' crit':state==='warn'?' warn':'');
+  pv.className='param-val'+(state==='crit'?' crit':state==='warn'?' warn':'');
+  if(pc) pc.className='param-cell'+(state==='crit'?' crit':state==='warn'?' warn':'');
+  pv.textContent=value;
+  const uspan=document.createElement('span'); uspan.className='param-unit'; uspan.textContent=m.unit; pv.appendChild(uspan);
+  if(m.svgBarId){ const bar=document.getElementById(m.svgBarId); if(bar){ const w=Math.round((value/m.max)*m.svgBarMax); bar.setAttribute('width',Math.max(0,w)); bar.setAttribute('fill',state==='crit'?'#ff2200':state==='warn'?'#ffaa00':'#00cc55'); } }
+  if(m.svgValId){ const lbl=document.getElementById(m.svgValId); if(lbl){ if(idx===0) lbl.textContent=`Cl: ${value}`; else lbl.textContent=`SPD: ${value}%`; } }
+}
+
+function updateReservoirSVG(pct){
+  const fill=document.getElementById('res-fill'), text=document.getElementById('res-pct');
+  if(!fill||!text) return;
+  const tankH=88,tankTop=108,tankBot=tankTop+tankH;
+  const fh=Math.max(0,Math.round((pct/100)*tankH));
+  fill.setAttribute('y',tankBot-fh); fill.setAttribute('height',fh||0);
+  const color=pct>90?'#ff2200':pct>75?'#ffaa00':'#00cc55';
+  const bg=pct>90?'#1a0300':pct>75?'#1f1400':'#001a0b';
+  fill.setAttribute('fill',bg); text.setAttribute('fill',color); text.textContent=pct+'%';
+}
+function setCoilDot(id,on){ const el=document.getElementById(id); if(!el) return; el.classList.remove('on','off'); el.classList.add(on?'on':'off'); }
+function setPipe(id,active){ const el=document.getElementById(id); if(!el) return; el.classList.remove('active','inactive'); el.classList.add(active?'active':'inactive'); el.setAttribute('stroke',active?'#00cc55':'#222'); el.setAttribute('marker-end',active?'url(#arr-on)':'url(#arr-off)'); }
+
+let _prevAlarm=null;
+function setAlarmState(active){
+  if(active===_prevAlarm) return; _prevAlarm=active;
+  const strip=document.getElementById('alarm-strip'), txt=document.getElementById('alarm-text');
+  if(active){ strip.className='active'; txt.textContent='⚠ ALARM ACTIVE — PROCESS FAULT DETECTED'; addLog('attack','⚠','SIS','ALARM_LED active'); }
+  else { strip.className=''; txt.textContent='ALL CLEAR — NO ACTIVE ALARMS'; }
+}
+
+/* ══ BOOT CHECKS ══ */
+function setBoot(key,status,text){
+  const icon=document.getElementById('boot-'+key+'-icon');
+  const textEl=document.getElementById('boot-'+key+'-text');
+  const row=document.getElementById('boot-'+key);
+  if(icon){
+    icon.className='boot-check '+(status==='ok'?'ok':'fail');
+    icon.textContent=status==='ok'?'✓':'✗';
+  }
+  if(textEl) textEl.textContent=text;
+  if(row) row.className='boot-line '+(status==='ok'?'ok':'fail');
+}
+
+/* ══ FIREWALL HEALTH (BUG1 FIX) ══ */
+async function checkFirewallHealth(){
+  try{
+    const r=await fetch('/defense/firewall/health');
+    const d=await r.json();
+    const alive=d.alive===true;
+    const pill=document.getElementById('pill-fw');
+    const sb=document.getElementById('sbadge-fw');
+    const det=document.getElementById('fw-detail');
+    if(alive){
+      pill.className='pill green'; pill.innerHTML='<span class="pill-dot"></span>FIREWALL ACTIVE';
+      sb.className='status-badge green'; sb.innerHTML='<span class="pill-dot"></span>FIREWALL ACTIVE';
+      if(det) det.textContent='127.0.0.1:5502 — 7 rules';
+      setBoot('fw','ok','Firewall on 127.0.0.1:5502 — IEC 62443-3-3 SL2');
+    } else {
+      pill.className='pill red'; pill.innerHTML='<span class="pill-dot"></span>FIREWALL OFFLINE';
+      sb.className='status-badge red'; sb.innerHTML='<span class="pill-dot"></span>FIREWALL OFFLINE';
+      if(det) det.textContent='127.0.0.1:5502 not responding';
+      setBoot('fw','fail','Firewall OFFLINE — direct :502 fallback active');
+    }
+  }catch(e){
+    document.getElementById('pill-fw').className='pill red';
+    document.getElementById('pill-fw').innerHTML='<span class="pill-dot"></span>FW UNKNOWN';
+  }
+}
+checkFirewallHealth();
+setInterval(checkFirewallHealth,3000);
+
+/* ══ NARRATIVE SSE ══ */
+let _narrativeSrc=null, _narrativeRetry=null, _feedCount=0;
+function connectNarrative(){
+  if(_narrativeSrc){_narrativeSrc.close();_narrativeSrc=null;}
+  _narrativeSrc=new EventSource('/dashboard/narrative');
+  _narrativeSrc.onmessage=function(e){
+    try{
+      const d=JSON.parse(e.data);
+      addLog(d.cls||'plc',d.icon||'●',d.tag||'SYS',d.msg||'');
+      // Hook for layer feed during attack
+      if(_mode==='attacking' && _activeAttack){
+        pushLayerFromNarrative(d);
+      }
+    }catch(err){}
+  };
+  _narrativeSrc.onerror=function(){ _narrativeSrc.close();_narrativeSrc=null; clearTimeout(_narrativeRetry);_narrativeRetry=setTimeout(connectNarrative,4000); };
+}
+
+function addLog(cls,icon,tag,msg){
+  const feed=document.getElementById('standby-feed');
+  if(!feed) return;
+  const div=document.createElement('div'); div.className='log-line '+(cls||'plc');
+  const safe=String(msg).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  div.innerHTML=`<span class="log-ts">${tsNow()}</span><span class="log-icon">${icon}</span><span class="log-tag">${(tag||'').padEnd(8)}</span><span class="log-msg">${safe}</span>`;
+  feed.appendChild(div);
+  while(feed.children.length>300) feed.removeChild(feed.firstChild);
+  feed.scrollTop=feed.scrollHeight;
+  _feedCount++;
+  const fc=document.getElementById('feed-count'); if(fc) fc.textContent=_feedCount+' EVENTS';
+}
+
+/* ══ TRAFFIC SSE ══ */
+let _trafficSrc=null, _trafficRetry=null;
+function connectTraffic(){
+  if(_trafficSrc){_trafficSrc.close();_trafficSrc=null;}
+  _trafficSrc=new EventSource('/dashboard/traffic');
+  _trafficSrc.onmessage=function(e){
+    try{
+      const p=JSON.parse(e.data);
+      if(p.status==='unavailable') return;
+      addTrafficRow(p);
+    }catch(err){}
+  };
+  _trafficSrc.onerror=function(){ _trafficSrc.close();_trafficSrc=null; clearTimeout(_trafficRetry);_trafficRetry=setTimeout(connectTraffic,4000); };
+}
+function addTrafficRow(pkt){
+  const tbody=document.getElementById('traffic-tbody'); if(!tbody) return;
+  const isBlock=pkt.verdict==='BLOCK', isAlert=pkt.verdict==='ALERT';
+  const tr=document.createElement('tr'); tr.className=isBlock?'pkt-block':'pkt-allow';
+  const fc=FC_LABEL[pkt.fc]||String(pkt.fc||'?').slice(0,8);
+  const val=pkt.value!=null?String(pkt.value):'READ';
+  const reg=pkt.register!=null?String(pkt.register):'—';
+  let vhtml;
+  if(isBlock){ const rid=pkt.rule_id?' '+pkt.rule_id:''; vhtml=`<span class="verdict-block">BLOCK${rid}</span>`; }
+  else if(isAlert){ vhtml=`<span class="verdict-block" style="border-color:#ff6600;color:#ff6600;">ALERT</span>`; }
+  else { vhtml=`<span class="verdict-allow">ALLOW</span>`; }
+  tr.innerHTML=`<td>${String(pkt.ts||'').slice(0,8)}</td><td>${fc}</td><td>${reg}</td><td>${val}</td><td>${vhtml}</td>`;
+  tbody.insertBefore(tr,tbody.firstChild);
+  while(tbody.rows.length>8) tbody.removeChild(tbody.lastChild);
+  if(isBlock) addLog('firewall','◈','FIREWALL',`${fc} ${pkt.rule_id||''} BLOCKED — ${reg}=${val}`);
+}
+
+/* ══ MODE MANAGER ══ */
+let _mode='standby';
+let attackRunning=false, _activeAttack=null;
+
+function setMode(mode, opts={}){
+  _mode=mode;
+  const badge=document.getElementById('mode-badge');
+  const standby=document.getElementById('standby-panel');
+  const atkPanel=document.getElementById('attack-mode-panel');
+  const sumPanel=document.getElementById('summary-panel');
+
+  // Hide all right-col panels
+  standby.classList.remove('hidden');
+  atkPanel.classList.remove('visible');
+  sumPanel.classList.remove('visible');
+
+  if(mode==='standby'){
+    badge.textContent='STANDBY'; badge.className='';
+    clearStageHighlights();
+  } else if(mode==='attacking'){
+    badge.textContent='ATTACK IN PROGRESS'; badge.className='attacking';
+    standby.classList.add('hidden');
+    atkPanel.classList.add('visible');
+    populateAttackPanel(opts.type);
+    highlightStage(opts.stage);
+    scheduleLayerFeed(opts.type);
+  } else if(mode==='defended' || mode==='post-attack'){
+    badge.textContent='ATTACK COMPLETE'; badge.className='defended';
+    clearTimeout(_layerTimer);
+    standby.classList.add('hidden');
+    // Transition: briefly hold attack panel, then show summary
+    setTimeout(()=>{
+      atkPanel.classList.remove('visible');
+      sumPanel.classList.add('visible');
+      populateSummary(opts);
+      _defmType=opts.type;
+      document.getElementById('defm-btn-wrap').style.display='block';
+      startSummaryCountdown(()=>{
+        document.getElementById('defm-btn-wrap').style.display='none';
+        setMode('standby');
+      });
+    }, 1500);
+  } else if(mode==='normal'){
+    badge.textContent='OPERATIONAL'; badge.className='normal';
+  }
+}
+
+function clearStageHighlights(){
+  ['intake','dosing','filter','uv','reservoir','dist'].forEach(s=>{ const el=document.getElementById('box-'+s); if(el) el.classList.remove('attack-stage'); });
+}
+function highlightStage(stage){
+  clearStageHighlights();
+  if(!stage||stage==='none') return;
+  if(stage==='all'){ ['intake','dosing','filter','uv','reservoir','dist'].forEach(s=>{ const el=document.getElementById('box-'+s); if(el) el.classList.add('attack-stage'); }); return; }
+  const el=document.getElementById('box-'+stage); if(el) el.classList.add('attack-stage');
+}
+
+/* ══ ATTACK PANEL ══ */
+function populateAttackPanel(type){
+  const atk=ATTACKS[type]; if(!atk) return;
+  document.getElementById('atk-name').textContent=atk.name;
+  document.getElementById('atk-mitre-tag').textContent=atk.mitre;
+  document.getElementById('layer-feed').innerHTML='';
+  document.getElementById('verdict-banner').className='pending';
+  document.getElementById('verdict-banner').textContent='● AWAITING DEFENSE VERDICT';
+}
+
+let _layerTimer=null, _layerIdx=0;
+function scheduleLayerFeed(type){
+  const atk=ATTACKS[type]; if(!atk) return;
+  _layerIdx=0; clearTimeout(_layerTimer);
+  // Slow drift has 13 layers over 30s — pace them at ~2.2s each
+  // Other attacks have 5-7 layers — pace at 800ms each
+  const interval = type==='logic' ? 2200 : 800;
+  function showNext(){
+    if(_layerIdx>=atk.layers.length) return;
+    const layer=atk.layers[_layerIdx++];
+    const feed=document.getElementById('layer-feed'); if(!feed) return;
+    const div=document.createElement('div'); div.className='layer-line '+layer.cls;
+    div.innerHTML=`<span class="layer-label">${layer.label} →</span><span class="layer-text"> ${layer.text}</span>`;
+    feed.appendChild(div);
+    feed.scrollTop=feed.scrollHeight;
+    if(_layerIdx<atk.layers.length) _layerTimer=setTimeout(showNext,interval);
+  }
+  _layerTimer=setTimeout(showNext,400);
+}
+
+function pushLayerFromNarrative(d){
+  // Push real narrative lines into layer feed as they arrive
+  const clsMap={'attack':'attacker','firewall':'firewall','plc':'plc','sis':'sis','cm':'cm'};
+  const cls=clsMap[d.cls]||d.cls;
+  const feed=document.getElementById('layer-feed'); if(!feed) return;
+  // Avoid duplicating what scheduleLayerFeed already showed for predefined layers
+  // Only push lines that come in AFTER layers are done
+  if(_layerIdx<(ATTACKS[_activeAttack]?.layers?.length||0)) return;
+  const div=document.createElement('div'); div.className='layer-line '+(clsMap[d.cls]||'plc');
+  const safe=String(d.msg||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const labelMap={'attack':'ATTACKER','firewall':'FIREWALL','plc':'PLC','sis':'SIS','cm':'CM','system':'SYSTEM'};
+  div.innerHTML=`<span class="layer-label">${labelMap[d.cls]||d.tag||'SYS'} →</span><span class="layer-text"> ${safe}</span>`;
+  feed.appendChild(div); feed.scrollTop=feed.scrollHeight;
+}
+
+function setVerdictBanner(verdict, text){
+  const el=document.getElementById('verdict-banner');
+  el.className=verdict; el.textContent=text;
+}
+
+/* ══ SUMMARY PANEL ══ */
+function populateSummary(opts){
+  const atk=ATTACKS[opts.type]; if(!atk) return;
+  const verdict=opts.verdict||'unknown';
+  document.getElementById('sum-attempted').textContent=atk.summary.attempted;
+  const defEl=document.getElementById('sum-defense');
+  if(verdict==='blocked'){ defEl.textContent=atk.summary.defense+' — BLOCKED SUCCESSFULLY'; defEl.className='summary-val blocked'; }
+  else if(verdict==='allowed'){ defEl.textContent='No defense layer blocked this attack'; defEl.className='summary-val passed'; }
+  else { defEl.textContent=atk.summary.defense+' — monitoring'; defEl.className='summary-val'; }
+  const plcNow=_lastRegs?`Cl=${_lastRegs[0]}, Coag=${_lastRegs[1]}, Speed=${_lastRegs[2]}, Level=${_lastRegs[3]}`:'—';
+  document.getElementById('sum-plc-state').textContent=plcNow;
+  const outEl=document.getElementById('sum-outcome');
+  if(verdict==='blocked'){ outEl.textContent='BLOCKED — Defense layer stopped the attack'; outEl.className='summary-val blocked'; }
+  else if(verdict==='allowed'){ outEl.textContent='SUCCEEDED — Attack reached PLC (use RESTORE SAFE STATE)'; outEl.className='summary-val passed'; }
+  else { outEl.textContent='UNCERTAIN — Firewall offline or inconclusive'; outEl.className='summary-val'; }
+}
+
+let _summaryCountdown=null;
+function startSummaryCountdown(cb){
+  let t=10;
+  const el=document.getElementById('sum-timer'); if(el) el.textContent=t;
+  clearInterval(_summaryCountdown);
+  _summaryCountdown=setInterval(()=>{
+    t--;
+    if(el) el.textContent=t;
+    if(t<=0){ clearInterval(_summaryCountdown); cb(); }
+  },1000);
+}
+
+/* ══ ATTACK BUTTONS ══ */
+function setAttackUI(running,btnId){
+  attackRunning=running;
+  document.querySelectorAll('.atk-btn').forEach(b=>{ b.disabled=running; b.classList.remove('running'); });
+  if(running&&btnId) document.getElementById(btnId).classList.add('running');
+}
+
+async function launchAttack(type){
+  if(attackRunning) return;
+  const atk=ATTACKS[type]; if(!atk) return;
+  _activeAttack=type;
+  setAttackUI(true,atk.btnId);
+  setMode('attacking',{type,stage:atk.stage});
+  try{
+    const resp=await fetch(atk.endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(atk.body)});
+    const data=await resp.json();
+    // BUG3 FIX: use real verdict from server response
+    const verdict=data.verdict||'unknown';
+    if(verdict==='blocked'){
+      setVerdictBanner('blocked','◼ FIREWALL BLOCKED — ATTACK CONTAINED');
+    } else if(verdict==='allowed'){
+      setVerdictBanner('passed','⚠ WRITE SUCCEEDED — DEFENSE MISSED');
+    } else {
+      // unknown = firewall offline, attack went direct to PLC
+      if(data.ok) setVerdictBanner('passed','⚠ WRITE SUCCEEDED — DEFENSE MISSED');
+      else setVerdictBanner('blocked','◼ WRITE FAILED OR BLOCKED');
+    }
+    await new Promise(r=>setTimeout(r,2000));
+    setMode('post-attack',{type,verdict});
+  }catch(err){
+    addLog('attack','✖','ERROR',`POST failed: ${err.message}`);
+    setMode('standby');
+  }finally{
+    setAttackUI(false,null);
+    _activeAttack=null;
+  }
+}
+
+async function resetPLC(){
+  if(attackRunning) return;
+  setAttackUI(true,'btn-reset');
+  document.getElementById('btn-reset').classList.add('running');
+  try{
+    const resp=await fetch('/attacker/attack/reset',{method:'POST'});
+    const data=await resp.json();
+    if(!data.ok) addLog('attack','✖','ERROR',`Reset failed: ${data.msg}`);
+    else { setMode('normal'); setTimeout(()=>setMode('standby'),3000); }
+  }catch(err){ addLog('attack','✖','ERROR',`Reset failed: ${err.message}`); }
+  finally{ setAttackUI(false,null); document.getElementById('btn-reset').classList.remove('running'); }
+}
+
+/* ══ BOOT ══ */
+updateReservoirSVG(50);
+addLog('system','◈','SYSTEM','SCADA Terminal v4 — redesigned presentation mode');
+addLog('system','◈','SYSTEM','Connecting to PLC...');
+connectSSE();
+connectNarrative();
+connectTraffic();
+
+/* ══ DEFENSE DATA ══ */
+const DEF_DATA={
+  overdose:{
+    atk:'CHLORINE OVERDOSE — T0831',
+    fw:{id:'VAL-001',detail:'Range enforcement — blocks FC06 writes to HR0 exceeding 800 ppm at the Modbus proxy'},
+    sis:{id:'SIS-1',detail:'Hard shutdown — trips dosing pump if Cl > 700 ppm reaches the PLC'},
+    cm:{id:'CM-6 Z-SCORE',detail:'Statistical alert — Cl 200 ppm above rolling baseline mean triggers anomaly flag'},
+    mit:'VAL-001 drops any FC06 write setting HR0 above 800 ppm before it reaches the PLC. If a write bypasses the proxy, SIS-1 trips the dosing pump at 700 ppm as a hardware backstop. CM-6 monitors statistically via Z-score and flags deviation from baseline independently of both layers.',
+    iec:['SR 3.5 — Input Validation (SL2)','SR 7.6 — Network & Security Configuration'],
+    rw:'Without VAL-001: Chlorine reaches 1000 ppm in 6 seconds — 2.5× the EPA limit. Trihalomethane formation begins immediately; acute gastrointestinal harm reaches consumers within hours of distribution.',
+  },
+  suppress:{
+    atk:'ALARM SUPPRESSION — T0838',
+    fw:{id:'INT-001',detail:'Blocks FC05 writes setting Coil 10 (Alarm_LED) OFF while process registers exceed safe thresholds'},
+    sis:{id:'SIS-2',detail:'Cross-correlation — Alarm_LED=OFF with Cl>400 ppm generates independent out-of-band alert bypassing the suppressed channel'},
+    cm:{id:'CM-6 COIL',detail:'Coil anomaly — Alarm_LED held OFF >3s with elevated register baseline triggers anomaly flag'},
+    mit:'INT-001 blocks any FC05 write silencing alarms while elevated values are present. SIS-2 cross-correlates: if alarm is suppressed but Cl is elevated, an alert fires through a separate channel the attacker cannot silence via Modbus. CM-6 detects the sustained coil state as a statistical outlier.',
+    iec:['SR 3.1 — Communication Integrity (SL2)','SR 6.1 — Audit Log Accessibility'],
+    rw:'Without INT-001: operators see a silent plant during an active overdose — exactly the Oldsmar 2021 attack. NaOH was raised to 111× safe levels while alarms were masked. Manual discovery takes 10–30 minutes.',
+  },
+  blackout:{
+    atk:'SYSTEM BLACKOUT — T0816',
+    fw:{id:'INT-002',detail:'Bulk coil-OFF detection — blocks FC15 packets setting ≥8 coils FALSE in a single transaction'},
+    sis:{id:'SIS-3',detail:'System_Enable shutdown flag — holds UV and Distribution coils in last safe state for 30s if Coil 11 transitions OFF'},
+    cm:{id:'CM-6 MASS-COIL',detail:'Mass-coil-OFF pattern — all 12 coils FALSE simultaneously matches critical attack signature'},
+    mit:'INT-002 detects the FC15 write-multiple-coils signature setting ≥8 coils FALSE at once — a pattern impossible during normal operation. The write is blocked at the proxy. SIS-3 holds critical actuators energised for 30 seconds while the operator confirms.',
+    iec:['SR 3.6 — Deterministic Output (SL2)','SR 7.1 — Denial-of-Service Protection'],
+    rw:'Without INT-002: all 12 coils go FALSE in one packet. No intake, dosing, UV, or distribution. Microbial growth begins within 24 hours. Manual PLC re-initialisation takes 2–4 hours offline.',
+  },
+  overflow:{
+    atk:'TANK OVERFLOW — T0803',
+    fw:{id:'INT-003',detail:'Sequence detection — blocks Coil 7 ON + HR3→0 two-write sequence within 500ms (physically impossible under normal operation)'},
+    sis:{id:'SIS-4',detail:'Overflow interlock — trips inlet valve via hardwired actuator when Reservoir_Inlet=ON concurrent with Level_Pct<5%'},
+    cm:{id:'CM-6 CORRELATION',detail:'Correlation anomaly — inlet coil ON while level sensor reads near-zero is physically impossible; flagged as critical'},
+    mit:'INT-003 detects the two-write sequence: Coil 7→ON then HR3→0 within 500ms — impossible during normal operation. Both writes are blocked. SIS-4 trips the physical inlet valve via hardwired interlock, bypassing the compromised Modbus actuator entirely.',
+    iec:['SR 3.5 — Input Validation (SL2)','SR 3.8 — Software and Information Integrity'],
+    rw:'Without INT-003: the reservoir fills to capacity while the PLC believes it is empty, keeping the inlet open. ~500,000 litres overflows within ~4 minutes, causing structural damage and a regulatory shutdown lasting days to weeks.',
+  },
+  logic:{
+    atk:'SLOW DRIFT / LOGIC INJECT — T0873',
+    fw:{id:'VAL-001 (RoC)',detail:'Each individual write is within [0–800] and passes threshold check; RoC rule detects cumulative drift exceeding 60 units'},
+    sis:{id:'SIS-5 (watching)',detail:'Hard limit 700 ppm not crossed during drift — SIS did not trip by design. CM-6 is the primary defence here.'},
+    cm:{id:'CM-6 RoC',detail:'Rate-of-change Z-score — Cl rising +10 ppm per 2s; Z-score crossed 2σ alert threshold at step 8 of 15'},
+    mit:'Threshold alarms and the SIS are blind to slow drift — each write is within the safe range. CM-6 is the sole effective defence: its rolling RoC Z-score alerts when drift exceeds 2σ (triggered at step 8). A secondary firewall RoC rule can auto-block further writes after the CM-6 alert fires.',
+    iec:['SR 3.2 — Malicious Code Protection (SL2)','SR 6.2 — Continuous Monitoring'],
+    rw:'Without CM-6 RoC detection: drift reaches 350 ppm with no threshold alarm. Over 24 hours, cumulative chlorine exposure exceeds WHO guidelines. Operators watching only static alarms have no indication anything is wrong — invisible by design.',
+  },
+};
+
+let _defmType=null;
+
+function defmOpen(){
+  const d=DEF_DATA[_defmType];
+  if(!d) return;
+  document.getElementById('defm-atk').textContent=d.atk;
+  document.getElementById('defm-fw').innerHTML='<span class="defm-chip fw">'+d.fw.id+'</span><div class="defm-detail">'+d.fw.detail+'</div>';
+  document.getElementById('defm-sis').innerHTML='<span class="defm-chip sis">'+d.sis.id+'</span><div class="defm-detail">'+d.sis.detail+'</div>';
+  document.getElementById('defm-cm').innerHTML='<span class="defm-chip cm">'+d.cm.id+'</span><div class="defm-detail">'+d.cm.detail+'</div>';
+  document.getElementById('defm-mit').textContent=d.mit;
+  document.getElementById('defm-iec').innerHTML=d.iec.map(s=>'<span class="defm-chip iec">'+s+'</span>').join(' ');
+  document.getElementById('defm-rw').textContent=d.rw;
+  document.getElementById('defm-body').scrollTop=0;
+  document.getElementById('defm-backdrop').classList.add('open');
+}
+
+function defmClose(){
+  document.getElementById('defm-backdrop').classList.remove('open');
+}
+
+function defmBgClick(e){
+  if(e.target===document.getElementById('defm-backdrop')) defmClose();
+}
+
+</script>
+
+<!-- DEFENSE & MITIGATION MODAL -->
+<div id="defm-backdrop" onclick="defmBgClick(event)">
+  <div id="defm-box">
+    <div id="defm-hdr">
+      <div id="defm-hdr-left">
+        <div id="defm-label">◈ DEFENSE &amp; MITIGATION ANALYSIS</div>
+        <div id="defm-atk"></div>
+      </div>
+      <button id="defm-close" onclick="defmClose()">✕</button>
+    </div>
+    <div id="defm-body">
+      <div class="defm-row">
+        <div class="defm-lbl">▸ Firewall Rule Fired</div>
+        <div id="defm-fw"></div>
+      </div>
+      <div class="defm-row">
+        <div class="defm-lbl">▸ SIS Interlock Armed</div>
+        <div id="defm-sis"></div>
+      </div>
+      <div class="defm-row">
+        <div class="defm-lbl">▸ CM-6 Anomaly Triggered</div>
+        <div id="defm-cm"></div>
+      </div>
+      <div class="defm-row">
+        <div class="defm-lbl">▸ Mitigation Strategy</div>
+        <div class="defm-text" id="defm-mit"></div>
+      </div>
+      <div class="defm-row">
+        <div class="defm-lbl">▸ IEC 62443-3-3 SL2 Reference</div>
+        <div id="defm-iec"></div>
+        <div class="defm-rw">
+          <div class="defm-rw-lbl">⚠ Without This Defense</div>
+          <div class="defm-rw-txt" id="defm-rw"></div>
+        </div>
+      </div>
+    </div>
+    <div id="defm-ftr">
+      <span id="defm-ftr-note">IEC 62443-3-3 SL2 · CPSS Water Treatment Simulator</span>
+      <button id="defm-ftr-btn" onclick="defmClose()">CLOSE ✕</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>

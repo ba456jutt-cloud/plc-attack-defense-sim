@@ -1,0 +1,21 @@
+Located,Variable Name,Address,Type,Size
+__LOCATED_VAR(BOOL,Intake_Pump,Q,X,0,0),Intake_Pump,%QX0.0,BOOL,1
+__LOCATED_VAR(BOOL,Intake_Valve,Q,X,0,1),Intake_Valve,%QX0.1,BOOL,1
+__LOCATED_VAR(BOOL,Chlorine_Pump,Q,X,0,2),Chlorine_Pump,%QX0.2,BOOL,1
+__LOCATED_VAR(BOOL,Coagulant_Pump,Q,X,0,3),Coagulant_Pump,%QX0.3,BOOL,1
+__LOCATED_VAR(BOOL,Dosing_Enable,Q,X,0,4),Dosing_Enable,%QX0.4,BOOL,1
+__LOCATED_VAR(BOOL,Filter_Valve,Q,X,0,5),Filter_Valve,%QX0.5,BOOL,1
+__LOCATED_VAR(BOOL,UV_System,Q,X,0,6),UV_System,%QX0.6,BOOL,1
+__LOCATED_VAR(BOOL,Reservoir_Inlet,Q,X,0,7),Reservoir_Inlet,%QX0.7,BOOL,1
+__LOCATED_VAR(BOOL,Reservoir_Outlet,Q,X,1,0),Reservoir_Outlet,%QX1.0,BOOL,1
+__LOCATED_VAR(BOOL,Distribution_Pump,Q,X,1,1),Distribution_Pump,%QX1.1,BOOL,1
+__LOCATED_VAR(BOOL,Alarm_LED,Q,X,1,2),Alarm_LED,%QX1.2,BOOL,1
+__LOCATED_VAR(BOOL,System_Enable,Q,X,1,3),System_Enable,%QX1.3,BOOL,1
+__LOCATED_VAR(BOOL,Level_Low_Sensor,I,X,0,0),Level_Low_Sensor,%IX0.0,BOOL,1
+__LOCATED_VAR(BOOL,Level_High_Sensor,I,X,0,1),Level_High_Sensor,%IX0.1,BOOL,1
+__LOCATED_VAR(BOOL,Filter_Pressure_OK,I,X,0,2),Filter_Pressure_OK,%IX0.2,BOOL,1
+__LOCATED_VAR(BOOL,Flow_Sensor,I,X,0,3),Flow_Sensor,%IX0.3,BOOL,1
+__LOCATED_VAR(INT,Chlorine_Dose,Q,W,0,0),Chlorine_Dose,%QW0,INT,2
+__LOCATED_VAR(INT,Coagulant_Dose,Q,W,0,1),Coagulant_Dose,%QW1,INT,2
+__LOCATED_VAR(INT,Distribution_Speed,Q,W,0,2),Distribution_Speed,%QW2,INT,2
+__LOCATED_VAR(INT,Reservoir_Level_Pct,Q,W,0,3),Reservoir_Level_Pct,%QW3,INT,2
